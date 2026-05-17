@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,400&family=Inter:wght@300;400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-bg-warm: #f5f2ed;
+  --color-ink-dark: #1a1a1a;
+  --color-olive: #5A5A40;
+  --font-serif: "Cormorant Garamond", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-bg-warm);
+  color: var(--color-ink-dark);
+}
+
+.font-serif {
+  font-family: var(--font-serif);
+}
+
+/* Base custom styles inspired by "Warm Organic / Cultural" and "Luxury / Prestige" recipes */
+.olive-button {
+  background-color: var(--color-olive);
+  color: #fff;
+  border-radius: 9999px;
+  padding: 12px 24px;
+  letter-spacing: 0.5px;
+  transition: all 0.2s ease;
+}
+.olive-button:hover {
+  background-color: #4a4a35;
+}
+
+.pill-image {
+  border-radius: 9999px;
+  aspect-ratio: 3/4;
+  object-fit: cover;
+}
+
+.warm-card {
+  background-color: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0px 4px 20px rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(26, 26, 26, 0.1);
+}
+
+/* Oversized Serif Numbers for Dashboard Steps */
+.oversized-number {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 64px;
+  line-height: 0.8;
+  color: var(--color-olive);
+  opacity: 0.2;
+}
+
+/* Headings */
+h1, h2, h3 {
+  font-family: var(--font-serif);
+}

@@ -1,0 +1,8 @@
+{
+  "name": "VerifiedVote",
+  "description": "A secure remote voting authorization platform.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
