@@ -1,5 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 interface VoterData {
   voter_id: string;
@@ -14,7 +17,8 @@ export class MockAdapter {
 
   constructor() {
     try {
-      const data = fs.readFileSync(path.join(process.cwd(), 'backend/src/db/seed/voter_roll.json'), 'utf8');
+      const rollPath = path.join(__dirname, '../../db/seed/voter_roll.json');
+      const data = fs.readFileSync(rollPath, 'utf8');
       const parsed = JSON.parse(data);
       parsed.voters.forEach((v: VoterData) => {
         this.voters.set(v.voter_id.toUpperCase(), v);

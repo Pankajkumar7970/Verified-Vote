@@ -1,0 +1,27 @@
+# VerifiedVote AI Service — Python dependencies
+# Updated for Python 3.13 compatibility
+
+# Web framework
+fastapi==0.111.*
+uvicorn[standard]==0.30.*
+
+# Face recognition — upgrade to get numpy 2.x support
+deepface>=0.0.93
+
+# TF backend
+tf-keras>=2.16
+
+# Computer vision — 4.10+ has Python 3.13 wheels
+opencv-python-headless>=4.10.0,<4.12
+
+# Numerical — numpy 2.x required for Python 3.13
+numpy>=2.0.0,<2.3
+
+# Data validation
+pydantic>=2.10,<3
+
+# Utilities
+python-multipart==0.0.9
+
+# Image processing
+scikit-image>=0.22

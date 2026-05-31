@@ -4,10 +4,7 @@ import { logger } from '../utils/logger.js';
 
 async function execute() {
   try {
-    const client = await db.getClient();
-    try {
-      await client.query('BEGIN');
-      
+    await db.withTransaction(async (client) => {
       const res = await client.query(`
         DELETE FROM otps
         WHERE expires_at < now() - INTERVAL '1 day' OR invalidated_at < now() - INTERVAL '1 day'
@@ -17,14 +14,7 @@ async function execute() {
         logger.info({ action: 'cron_purge_otps', count: res.rowCount });
         // NOTE: Purging old OTPs usually doesn't require an audit log for security unless strict compliance requires it
       }
-      
-      await client.query('COMMIT');
-    } catch(err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    });
   } catch (err: any) {
     logger.error({ action: 'cron_purge_otps_failed', error: err.message });
   }
@@ -32,6 +22,11 @@ async function execute() {
 
 export function startPurgeOTPsJob() {
   setInterval(() => {
-    runWithLock('purge_otps', execute);
+    void runWithLock('purge_otps', execute).catch((err: unknown) => {
+      logger.error({
+        action: 'purge_otps_job_failed',
+        error: err instanceof Error ? err.message : 'unknown',
+      });
+    });
   }, 6 * 60 * 60 * 1000); // Every 6 hours
 }

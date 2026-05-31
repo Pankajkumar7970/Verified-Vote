@@ -1,146 +1,200 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { db } from '../db/index.js';
-import { VoterVerificationService } from '../services/voter-verify/mock.adapter.js';
+import { VoterVerificationService } from '../services/voter-verify/index.js';
 import { otpService } from '../services/otp.service.js';
-import { SMSService } from '../services/sms/textbee.adapter.js';
 import { logger } from '../utils/logger.js';
 import jwt from 'jsonwebtoken';
+import { config } from '../utils/config.js';
+import { queueNotification } from '../services/sms/notification-queue.js';
+import { verifyTurnstile } from '../middleware/turnstile.middleware.js';
+import { ValidationError, AuthError } from '../utils/errors.js';
+import { validate } from '../middleware/validate.middleware.js';
+import { z } from 'zod';
+import { ipBlockerMiddleware, recordFailedAttempt, clearFailedAttempts } from '../middleware/ip-blocker.middleware.js';
+
+const verifyVoterSchema = z.object({
+  body: z.object({
+    voter_id: z.string().regex(/^[A-Z]{3}[A-Z0-9]{7}$/i, 'invalid_voter_id'),
+  })
+});
+
+const resendOtpSchema = z.object({
+  body: z.object({
+    session_nonce: z.string().min(1, 'missing_session_nonce'),
+  })
+});
+
+const verifyOtpSchema = z.object({
+  body: z.object({
+    session_nonce: z.string().min(1, 'missing_fields'),
+    otp: z.string().min(1, 'missing_fields'),
+  })
+});
 
 const router = Router();
+const isTest = process.env.NODE_ENV === 'test';
 
-const voterVerifyLimiter = rateLimit({
+const voterVerifyLimiter = isTest ? (req: any, res: any, next: any) => next() : rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   handler: (req, res) => {
     logger.warn({ action: 'verify_voter_rate_limit', ip: req.ip, request_id: req.requestId });
-    res.status(429).json({ error: 'too_many_requests' });
-  }
+    res.status(429).json({ error: 'too_many_requests', request_id: req.requestId });
+  },
 });
 
-const otpLimiter = rateLimit({
+const otpLimiter = isTest ? (req: any, res: any, next: any) => next() : rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 3,
   handler: (req, res) => {
-    res.status(429).json({ error: 'too_many_requests' });
-  }
+    res.status(429).json({ error: 'too_many_requests', request_id: req.requestId });
+  },
 });
 
-router.post('/verify-voter', voterVerifyLimiter, async (req, res) => {
+router.post('/verify-voter', voterVerifyLimiter, verifyTurnstile, validate(verifyVoterSchema), async (req, res, next) => {
   const { voter_id } = req.body;
-  if (!/^[A-Z]{3}[A-Z0-9]{7}$/i.test(voter_id)) {
-    return res.status(400).json({ error: 'invalid_voter_id' });
-  }
 
   try {
     const voter = await VoterVerificationService.verifyVoter(voter_id);
     if (!voter) {
-      // Simulate not found generically
-      return res.status(404).json({ error: 'voter_not_found' });
+      throw new ValidationError('verification_failed');
     }
 
-    // Hash Voter ID
     const { createHash } = await import('crypto');
     const voterIdHash = createHash('sha256').update(voter.voter_id.toUpperCase()).digest('hex');
-
-    // Upsert Voter and their encrypted fields using pgcrypto helper
     const { encryptValue } = await import('../utils/crypto.js');
     const voterIdEnc = await encryptValue(voter.voter_id.toUpperCase());
     const nameEnc = await encryptValue(voter.name);
     const phoneEnc = await encryptValue(voter.phone);
 
-    const client = await db.getClient();
-    let dbVoterId;
-    let sessionNonce;
-    let otp;
-    
-    try {
-      await client.query('BEGIN');
+    const sessionNonce = await db.withTransaction(async (client) => {
       const upsertRes = await client.query(
         `INSERT INTO voters (voter_id_hash, voter_id_enc, name_enc, phone_enc, constituency, state)
          VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (voter_id_hash) DO UPDATE SET 
+         ON CONFLICT (voter_id_hash) DO UPDATE SET
          name_enc = $3, phone_enc = $4, constituency = $5, state = $6
          RETURNING id`,
         [voterIdHash, voterIdEnc, nameEnc, phoneEnc, voter.constituency, voter.state]
       );
 
-      dbVoterId = upsertRes.rows[0].id;
-      sessionNonce = otpService.generateExchangeNonce();
-      otp = otpService.generateOTP();
+      const dbVoterId = upsertRes.rows[0].id;
+      const nonce = otpService.generateExchangeNonce();
+      const otp = otpService.generateOTP();
       const otpHash = await otpService.hashOTP(otp);
 
-      // Invalidate old auth requests
-      await client.query('UPDATE otps SET invalidated_at = now() WHERE voter_id = $1 AND invalidated_at IS NULL', [dbVoterId]);
-      
-      // Create OTP row
-      // Max 3 attempts, 10 min expiry
+      await client.query(
+        `UPDATE otps SET invalidated_at = now() WHERE voter_id = $1 AND invalidated_at IS NULL`,
+        [dbVoterId]
+      );
+
       await client.query(
         `INSERT INTO otps (voter_id, otp_hash, session_nonce, expires_at)
          VALUES ($1, $2, $3, now() + interval '10 minutes')`,
-         [dbVoterId, otpHash, sessionNonce]
+        [dbVoterId, otpHash, nonce]
       );
 
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
+      await queueNotification(dbVoterId, 'auth_otp', { otp }, client);
+      return nonce;
+    });
 
-    // Fire SMS
-    await SMSService.send(voter.phone, `Your VerifiedVote authentication OTP is ${otp}. Valid for 10 minutes.`);
-
-    logger.info({ action: 'otp_sent', request_id: req.requestId });
+    logger.info({
+      action: 'otp_queued',
+      request_id: req.requestId,
+      otp_hint: config.isProd ? undefined : 'see_sms_queue',
+    });
     res.json({ session_nonce: sessionNonce });
-  } catch(err: any) {
-    logger.error({ request_id: req.requestId, action: 'verify_voter_failed', error: err.message });
-    res.status(500).json({ error: 'internal_error' });
+  } catch (err: unknown) {
+    next(err);
   }
 });
 
-router.post('/verify-otp', otpLimiter, async (req, res) => {
-  const { otp, session_nonce } = req.body;
-  if (!otp || !session_nonce) return res.status(400).json({ error: 'missing_fields' });
+router.post('/resend-otp', otpLimiter, validate(resendOtpSchema), async (req, res, next) => {
+  const { session_nonce } = req.body;
 
   try {
-    const result = await db.query(`
-      SELECT o.id, o.otp_hash, o.voter_id, o.expires_at, o.invalidated_at, o.attempt_count, v.constituency, v.state 
-      FROM otps o
-      JOIN voters v ON o.voter_id = v.id
-      WHERE o.session_nonce = $1
-    `, [session_nonce]);
+    const otpRes = await db.query(
+      `SELECT voter_id FROM otps WHERE session_nonce = $1 AND invalidated_at IS NULL ORDER BY created_at DESC LIMIT 1`,
+      [session_nonce]
+    );
+    if (otpRes.rows.length === 0) {
+      throw new ValidationError('invalid_session');
+    }
+
+    const voterId = otpRes.rows[0].voter_id;
+    const otp = otpService.generateOTP();
+    const otpHash = await otpService.hashOTP(otp);
+
+    await db.query(`UPDATE otps SET invalidated_at = now() WHERE voter_id = $1 AND invalidated_at IS NULL`, [
+      voterId,
+    ]);
+    await db.query(
+      `INSERT INTO otps (voter_id, otp_hash, session_nonce, expires_at)
+       VALUES ($1, $2, $3, now() + interval '10 minutes')`,
+      [voterId, otpHash, session_nonce]
+    );
+    await queueNotification(voterId, 'auth_otp', { otp });
+
+    res.json({ success: true, session_nonce });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/verify-otp', ipBlockerMiddleware, otpLimiter, validate(verifyOtpSchema), async (req, res, next) => {
+  const { otp, session_nonce } = req.body;
+  const ip = req.ip || 'unknown';
+
+  try {
+    const result = await db.query(
+      `SELECT o.id, o.otp_hash, o.voter_id, o.expires_at, o.invalidated_at, o.attempt_count, v.constituency, v.state
+       FROM otps o
+       JOIN voters v ON o.voter_id = v.id
+       WHERE o.session_nonce = $1`,
+      [session_nonce]
+    );
 
     const otpRecord = result.rows[0];
-    if (!otpRecord) return res.status(401).json({ error: 'invalid_session' });
-    if (otpRecord.invalidated_at) return res.status(401).json({ error: 'otp_invalidated' });
-    if (new Date() > otpRecord.expires_at) return res.status(401).json({ error: 'otp_expired' });
-    
+    if (!otpRecord) {
+      recordFailedAttempt(ip);
+      throw new AuthError('invalid_session');
+    }
+    if (otpRecord.invalidated_at) {
+      recordFailedAttempt(ip);
+      throw new AuthError('otp_invalidated');
+    }
+    if (new Date() > otpRecord.expires_at) {
+      recordFailedAttempt(ip);
+      throw new AuthError('otp_expired');
+    }
     if (otpRecord.attempt_count >= 3) {
-      return res.status(401).json({ error: 'max_attempts_reached' });
+      recordFailedAttempt(ip);
+      throw new AuthError('max_attempts_reached');
     }
 
     const isValid = await otpService.verifyOTP(otp, otpRecord.otp_hash);
     if (!isValid) {
       await db.query('UPDATE otps SET attempt_count = attempt_count + 1 WHERE id = $1', [otpRecord.id]);
-      return res.status(401).json({ error: 'invalid_otp' });
+      recordFailedAttempt(ip);
+      throw new AuthError('invalid_otp');
     }
 
-    // Success
     await db.query('UPDATE otps SET invalidated_at = now() WHERE id = $1', [otpRecord.id]);
 
     const token = jwt.sign(
-      { voter_id: otpRecord.voter_id, constituency: otpRecord.constituency, state: otpRecord.state },
-      process.env.JWT_SECRET || 'mysecretjwtkey',
+      {
+        voter_id: otpRecord.voter_id,
+        constituency: otpRecord.constituency,
+        state: otpRecord.state,
+      },
+      config.voterJwtSecret,
       { expiresIn: '24h' }
     );
 
+    clearFailedAttempts(ip);
     res.json({ token });
-
-  } catch(err: any) {
-    logger.error({ request_id: req.requestId, action: 'verify_otp_failed', error: err.message });
-    res.status(500).json({ error: 'internal_error' });
+  } catch (err: unknown) {
+    next(err);
   }
 });
 

@@ -83,15 +83,17 @@ export default function ElectionResults() {
       </div>
 
       {showPublishDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="publish-dialog-title">
            <div className="bg-white rounded-lg p-6 max-w-sm w-full shadow-2xl">
               <ShieldCheck className="w-12 h-12 text-[#5A5A40] mb-4" />
-              <h3 className="text-xl font-serif mb-2">Security Verification</h3>
+              <h3 id="publish-dialog-title" className="text-xl font-serif mb-2">Security Verification</h3>
               <p className="text-sm text-gray-600 mb-6">Enter your admin password to finalize the election and cryptographically sign the results.</p>
               
               {errorMsg && <p className="text-red-600 text-sm mb-4">{errorMsg}</p>}
 
+              <label htmlFor="adminPassword" className="sr-only">Admin Password</label>
               <input 
+                 id="adminPassword"
                  type="password" 
                  placeholder="Admin Password"
                  value={password}

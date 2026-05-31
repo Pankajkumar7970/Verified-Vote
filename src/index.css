@@ -15,6 +15,45 @@ body {
   color: var(--color-ink-dark);
 }
 
+html.text-size-normal body {
+  font-size: 16px;
+}
+html.text-size-large body {
+  font-size: 18px;
+}
+html.text-size-xlarge body {
+  font-size: 20px;
+}
+
+html.high-contrast body {
+  background-color: #000;
+  color: #fff;
+}
+html.high-contrast .warm-card,
+html.high-contrast header,
+html.high-contrast table,
+html.high-contrast input,
+html.high-contrast select,
+html.high-contrast textarea {
+  background-color: #111 !important;
+  color: #fff !important;
+  border-color: #fff !important;
+}
+html.high-contrast .olive-button {
+  background-color: #fff;
+  color: #000;
+}
+html.high-contrast .olive-button:hover {
+  background-color: #ccc;
+}
+html.high-contrast a {
+  color: #0af;
+}
+html.high-contrast .text-gray-500,
+html.high-contrast .text-gray-600 {
+  color: #ccc !important;
+}
+
 .font-serif {
   font-family: var(--font-serif);
 }
@@ -31,6 +70,18 @@ body {
 .olive-button:hover {
   background-color: #4a4a35;
 }
+
+/* Global Accessibility Focus Ring */
+*:focus-visible {
+  outline: 2px solid var(--color-olive);
+  outline-offset: 2px;
+}
+.olive-button:focus-visible {
+  outline: 2px solid #1a1a1a;
+  outline-offset: 2px;
+}
+
+
 
 .pill-image {
   border-radius: 9999px;

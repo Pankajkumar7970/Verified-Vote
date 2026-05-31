@@ -3,11 +3,11 @@ import { runWithLock } from './lock.js';
 import { logger } from '../utils/logger.js';
 
 async function execute() {
+  if (process.env.ENABLE_AUDIT_LOG_PURGE !== 'true') {
+    return;
+  }
   try {
-    const client = await db.getClient();
-    try {
-      await client.query('BEGIN');
-      
+    await db.withTransaction(async (client) => {
       const res = await client.query(`
         DELETE FROM audit_logs
         WHERE created_at < now() - INTERVAL '1 year'
@@ -16,14 +16,7 @@ async function execute() {
       if (res.rowCount && res.rowCount > 0) {
         logger.info({ action: 'cron_purge_audit_logs', count: res.rowCount });
       }
-      
-      await client.query('COMMIT');
-    } catch(err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    });
   } catch (err: any) {
     logger.error({ action: 'cron_purge_audit_logs_failed', error: err.message });
   }

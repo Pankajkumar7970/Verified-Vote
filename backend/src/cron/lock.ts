@@ -1,5 +1,6 @@
 import { db } from '../db/index';
 import crypto from 'crypto';
+import { logger } from '../utils/logger.js';
 
 function deterministicInt(str: string): number {
   const hash = crypto.createHash('sha256').update(str).digest('hex');
@@ -8,20 +9,54 @@ function deterministicInt(str: string): number {
 
 export async function runWithLock(jobName: string, fn: () => Promise<void>) {
   const lockId = deterministicInt(jobName);
-  const { rows } = await db.query('SELECT pg_try_advisory_lock($1) as locked', [lockId]);
-  
-  if (!rows[0].locked) {
-    await updateCronStatus(jobName, 'skipped');
-    return;
-  }
-  
+  let client: Awaited<ReturnType<typeof db.getClient>> | null = null;
+
   try {
-    await fn();
-    await updateCronStatus(jobName, 'success');
-  } catch (err: any) {
-    await updateCronStatus(jobName, 'failed', err.message);
+    client = await db.getClient();
+    const onClientError = (err: Error) => {
+      logger.warn({
+        action: 'pg_cron_client_error',
+        job_name: jobName,
+        error: err.message,
+      });
+    };
+    client.on('error', onClientError);
+
+    const { rows } = await client.query('SELECT pg_try_advisory_lock($1) as locked', [lockId]);
+    
+    if (!rows[0].locked) {
+      await updateCronStatus(jobName, 'skipped');
+      return;
+    }
+    
+    try {
+      await fn();
+      await updateCronStatus(jobName, 'success');
+    } catch (err: any) {
+      await updateCronStatus(jobName, 'failed', err?.message || 'unknown_error');
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [lockId]);
+    }
+  } catch (err: unknown) {
+    logger.error({
+      action: 'cron_lock_failed',
+      job_name: jobName,
+      error: err instanceof Error ? err.message : 'unknown',
+    });
+    try {
+      await updateCronStatus(
+        jobName,
+        'failed',
+        err instanceof Error ? err.message : 'unknown',
+      );
+    } catch {
+      // no-op: cron status table may be unreachable when DB is down
+    }
   } finally {
-    await db.query('SELECT pg_advisory_unlock($1)', [lockId]);
+    if (client) {
+      client.removeAllListeners('error');
+      client.release();
+    }
   }
 }
 

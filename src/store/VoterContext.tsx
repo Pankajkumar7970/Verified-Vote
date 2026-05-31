@@ -1,5 +1,11 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { isStoredVoterTokenUsable } from '../utils/voterToken';
+
+function isVotingSessionApiUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  return url.includes('/api/session/') || url.includes('/api/vote/');
+}
 
 interface VoterContextType {
   token: string | null;
@@ -10,33 +16,68 @@ interface VoterContextType {
 
 const VoterContext = createContext<VoterContextType | undefined>(undefined);
 
+function readStoredVoterToken(): string | null {
+  const stored = localStorage.getItem('voter_token');
+  if (!stored) return null;
+  if (!isStoredVoterTokenUsable(stored)) {
+    localStorage.removeItem('voter_token');
+    return null;
+  }
+  return stored;
+}
+
 export function VoterProvider({ children }: { children: React.ReactNode }) {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('voter_token'));
+  const [token, setToken] = useState<string | null>(() => readStoredVoterToken());
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('voter_token');
+    setToken(null);
+  }, []);
 
   useEffect(() => {
-    // Setup Axios Interceptor for Voter requests
-    // We attach token only for non-admin API routes
-    const interceptor = axios.interceptors.request.use(
+    const requestInterceptor = axios.interceptors.request.use(
       (config) => {
-        if (token && config.url && !config.url.startsWith('/api/admin')) {
-          config.headers['Authorization'] = `Bearer ${token}`;
+        const active = readStoredVoterToken();
+        if (
+          active &&
+          config.url &&
+          !config.url.startsWith('/api/admin') &&
+          !isVotingSessionApiUrl(config.url)
+        ) {
+          config.headers['Authorization'] = `Bearer ${active}`;
         }
         return config;
       },
       (error) => Promise.reject(error)
     );
 
-    return () => axios.interceptors.request.eject(interceptor);
-  }, [token]);
+    const responseInterceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        const url = error.config?.url || '';
+        if (error.response?.status === 401 && url.includes('/api/voter')) {
+          localStorage.removeItem('voter_token');
+          setToken(null);
+          if (
+            typeof window !== 'undefined' &&
+            !window.location.pathname.startsWith('/vote')
+          ) {
+            window.location.replace('/');
+          }
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      axios.interceptors.request.eject(requestInterceptor);
+      axios.interceptors.response.eject(responseInterceptor);
+    };
+  }, []);
 
   const login = (newToken: string) => {
     localStorage.setItem('voter_token', newToken);
     setToken(newToken);
-  };
-
-  const logout = () => {
-    localStorage.removeItem('voter_token');
-    setToken(null);
   };
 
   return (

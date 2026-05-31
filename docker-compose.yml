@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: verifiedvote
+      POSTGRES_PASSWORD: verifiedvote
+      POSTGRES_DB: verifiedvote
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  ai-service:
+    build: ./ai-service
+    ports:
+      - "8000:8000"
+
+  backend:
+    build: ./
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - minio
+      - ai-service
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgres://verifiedvote:verifiedvote@postgres:5432/verifiedvote
+      - MINIO_ENDPOINT=minio
+      - MINIO_PORT=9000
+      - MINIO_USE_SSL=false
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - AI_SERVICE_URL=http://ai-service:8000
+    volumes:
+      - ./:/app
+      - /app/node_modules
+
+  frontend:
+    build: ./
+    command: npm run preview
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      - VITE_BACKEND_URL=http://localhost:3000
+
+volumes:
+  pgdata:
+  miniodata:

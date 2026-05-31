@@ -3,11 +3,8 @@ import crypto from 'crypto';
 
 export const otpService = {
   generateOTP: () => {
-    // Generate a 6 digit secure code - statically 123456 for test/demo
-    if (process.env.NODE_ENV !== 'production' || process.env.VITE_APP_URL?.includes('ais-')) {
-      return '123456';
-    }
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate a 6-digit cryptographically secure code
+    return crypto.randomInt(100000, 1000000).toString();
   },
 
   hashOTP: async (otp: string) => {

@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { logger } from '../utils/logger.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'mysecretjwtkey';
+import { config } from '../utils/config.js';
 
 export const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -12,7 +12,7 @@ export const requireAdmin = (req: Request, res: Response, next: NextFunction) =>
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = jwt.verify(token, config.adminJwtSecret) as any;
     if (!decoded.admin_id || !decoded.role) {
       throw new Error('invalid_token');
     }

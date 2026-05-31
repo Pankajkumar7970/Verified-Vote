@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { db } from '../db/index.js';
 import { logger } from '../utils/logger.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'mysecretjwtkey';
+import { config } from '../utils/config.js';
 
 export const requireVoter = async (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -13,7 +13,7 @@ export const requireVoter = async (req: Request, res: Response, next: NextFuncti
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = jwt.verify(token, config.voterJwtSecret) as any;
     if (!decoded.voter_id || !decoded.constituency || !decoded.state) {
       throw new Error('invalid_token');
     }
@@ -24,8 +24,15 @@ export const requireVoter = async (req: Request, res: Response, next: NextFuncti
       state: decoded.state 
     };
     next();
-  } catch (err: any) {
-    logger.warn({ action: 'voter_auth_failed', error: err.message, request_id: req.requestId });
-    res.status(401).json({ error: 'invalid_token', request_id: req.requestId });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'unknown';
+    const code =
+      message === 'invalid signature' || message === 'jwt malformed'
+        ? 'token_signature_invalid'
+        : message === 'jwt expired'
+          ? 'token_expired'
+          : 'invalid_token';
+    logger.warn({ action: 'voter_auth_failed', error: message, request_id: req.requestId });
+    res.status(401).json({ error: code, request_id: req.requestId });
   }
 };
