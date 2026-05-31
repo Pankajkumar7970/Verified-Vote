@@ -13,3 +13,18 @@ coverage/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Python (ai-service)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local DB artifacts (app uses PostgreSQL)
+*.db
+*.sqlite
+
+# Accidental dumps / scratch files
+diff.txt
+*.diff
+*.patch.bak

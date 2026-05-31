@@ -1,113 +1,120 @@
 # VerifiedVote
 
-VerifiedVote is a secure, remote postal voting application designed to provide citizens who are unable to vote in person (due to medical reasons, military service, living abroad, or remote work) a secure and verified way to cast their ballots from anywhere. 
+VerifiedVote is a secure, remote postal voting application for citizens who cannot vote in person (medical reasons, military service, living abroad, remote work). It combines document review, AI-assisted facial verification, and cryptographic receipt tokens.
 
-The application utilizes a multi-tier architecture involving cryptographic receipt generation, document review queues, and AI-powered facial verification to ensure the integrity of the voting process.
+**Prototype only** — not ECI-approved or certified for real elections. See [ARCHITECTURE.md](./ARCHITECTURE.md) for design rules, flows, and known limitations.
 
 ---
 
-## 🚀 Key Features
+## Key Features
 
 ### For Voters
-- **Remote Ballot Requests:** Eligible voters can request a remote ballot by submitting their Voter ID, a live photo, and supporting documents proving their eligibility.
-- **AI-Powered Identity Verification:** When the voting window opens, voters are verified using a live selfie which is matched against their baseline photo utilizing state-of-the-art AI facial recognition (DeepFace) to prevent impersonation.
-- **Secure Voting:** Votes are cast securely with encrypted payloads. Voters receive a cryptographic **Receipt Token** upon voting, which they can use to independently verify their vote was recorded without exposing their actual ballot choice.
-- **Responsive & Accessible UI:** The portal is fully responsive across all devices and adheres to modern web accessibility standards (ARIA attributes, keyboard navigation, high contrast modes).
+- **Remote ballot requests** — Submit Voter ID, supporting documents, and a baseline selfie for an active election.
+- **AI identity verification** — At voting time, a live selfie is compared to the stored baseline (DeepFace VGG-Face + OpenCV liveness).
+- **Secret ballot + receipt** — Votes are stored without voter linkage; voters receive a one-time **receipt token** to confirm their vote was recorded (not how they voted).
+- **Accessible UI** — Responsive layout, Hindi/English i18n (partial), font-size control, and high-contrast mode.
 
 ### For Election Administrators
-- **Document Review Queue:** Admins can securely review incoming postal ballot requests, verifying uploaded documents and face similarity scores before approving or rejecting applications.
-- **Election Management:** Super Admins can create elections, manage candidates and parties, activate elections for requests, and transition elections to the live voting phase.
-- **Audit Logs:** A secure, append-only cryptographic audit log tracks all administrative actions and system events.
-- **Result Publishing:** Once an election concludes, admins can securely publish the cryptographically signed tally.
+- **Review queue** — Multi-step approval (reviewer → super admin) with signed document preview.
+- **Election management** — Create elections, parties, and candidates; activate request intake; start voting; publish results.
+- **Audit trail** — Append-only `audit_logs` and `request_events` for admin and system actions.
+- **Session oversight** — View voting sessions, face-pending cases, and revoke sessions when needed.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-VerifiedVote uses a three-tier architecture:
+VerifiedVote runs as **three logical services** (see [ARCHITECTURE.md](./ARCHITECTURE.md)):
 
-1. **Frontend (React + Vite + TailwindCSS):** 
-   A modern, accessible frontend providing tailored workflows for voters and administrators.
-2. **Backend (Node.js + Express + PostgreSQL):** 
-   The core API handling authentication, request queues, state machines, voting logic, and integration with external services. Database interactions are managed via Drizzle ORM.
-3. **AI Service (Python + FastAPI):** 
-   A dedicated microservice handling CPU/GPU-intensive facial verification and liveness detection.
-4. **Storage (MinIO):** 
-   S3-compatible object storage for securely handling Personally Identifiable Information (PII) like voter IDs and selfies.
-5. **Security Services:** 
-   Integrates Cloudflare Turnstile for bot protection and TextBee for SMS OTP notifications.
+| Layer | Stack | Role |
+|---|---|---|
+| **App host** | React 19 + Vite 6 + Express (`server.ts`) | SPA + REST API on one port (3000 in dev) |
+| **Backend** | Node.js + TypeScript + **pg** (raw SQL) | Auth, state machines, cron, MinIO, AI proxy |
+| **Database** | PostgreSQL (+ `pgcrypto`) | Neon or local/Docker Postgres |
+| **Storage** | MinIO | Documents, ID photos, baseline/voting selfies |
+| **AI service** | Python FastAPI + DeepFace | `/embed`, `/verify`, `/liveness/blink` |
+| **Integrations** | Cloudflare Turnstile, TextBee SMS | Bot protection; async SMS queue |
 
----
-
-## 🔄 The Voting Flow
-
-1. **Election Creation:** Admins create an election for a specific state and constituency.
-2. **Authorization Request:** A voter accesses the portal, enters their Voter ID, completes an OTP verification, and submits a request with supporting documents (e.g., medical certificate) and a baseline photo.
-3. **Admin Review:** Election officials review the request queue. They verify the documents and approve the request.
-4. **Voting Phase:** Admins activate the voting phase. Approved voters receive an SMS with a secure, one-time voting link.
-5. **Identity Verification:** The voter opens the link, completes an OTP check, and takes a live selfie. The **AI Service** compares this live selfie with the baseline photo provided during the request phase.
-6. **Casting the Ballot:** If the AI verifies the identity, the voter is presented with the ballot, casts their vote, and receives a cryptographic receipt.
+The frontend never calls the AI service directly. All business logic and DB writes live in the Node backend.
 
 ---
 
-## 🛠️ Local Setup Guidelines
+## Voting Flow
 
-### 1. Prerequisites
+1. **Election setup** — Admin creates an election (state + constituency), adds candidates, and activates it for requests.
+2. **Voter auth** — Voter verifies ID (mock roll or future Protean API), completes OTP, and receives a portal JWT.
+3. **Request** — Voter uploads documents + baseline selfie; AI extracts an embedding; request enters `pending`.
+4. **Review** — Reviewer and super admin approve through `reviewer_approved` → `superadmin_approved` → `final_approved`.
+5. **Voting opens** — Super admin starts voting (password) or cron auto-starts on election date; SMS sends an opaque ref link (not a JWT).
+6. **Live verify** — Voter opens `/vote?ref=…`, completes OTP, takes a live selfie; AI compares to baseline.
+7. **Ballot** — On success, voter casts a vote and receives a receipt token; results publish manually or via cron.
+
+---
+
+## Local Setup
+
+### Prerequisites
 - Node.js 20+
-- PostgreSQL (or Neon URL)
-- Docker Desktop (for MinIO storage)
-- Python 3.10+ (for the AI Service)
+- PostgreSQL 16 (local, Docker, or [Neon](https://neon.tech))
+- Docker Desktop (recommended for MinIO; optional for Postgres)
+- Python 3.11+ (AI service)
 
-### 2. Environment Variables
-Copy the `.env.example` file to `.env`:
-```bash
-cp .env.example .env
-```
-Fill in the necessary values (Database URLs, Admin credentials, Turnstile keys).
+### Quick start
 
-### 3. Database & Backend Setup
-Install Node dependencies, run database migrations, and seed the initial admin accounts:
 ```bash
+cp .env.example .env   # edit DATABASE_URL, secrets, MinIO, AI URL
 npm install
 npm run migrate
 npm run seed:admins
+docker compose up -d minio   # optional but recommended
+npm run dev
 ```
 
-### 4. MinIO Setup (Document & Photo Storage)
-MinIO is required to store uploaded voter IDs and documents. Start it using Docker:
-```bash
-docker compose up -d minio
-```
-*(MinIO Console is available at http://localhost:9001 with default credentials `minioadmin` / `minioadmin`)*
+Open **http://localhost:3000**.
 
-### 5. AI Service Setup (Facial Verification)
-The Python service runs independently to process images during the live voting phase.
+For Postgres via Docker: `docker compose up -d postgres` and set  
+`DATABASE_URL=postgres://verifiedvote:verifiedvote@localhost:5432/verifiedvote`.
+
+### AI service (separate terminal)
+
 ```bash
 cd ai-service
 python -m venv .venv
-
-# Activate virtual environment
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-source .venv/bin/activate
-
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --host 127.0.0.1 --port 8000
 ```
-*Note: The first start may take a few minutes as it downloads the DeepFace models.*
 
-### 6. Start the Application
-Return to the root directory and start the development server:
-```bash
-npm run dev
-```
-The application will be available at **http://localhost:3000**.
+Set `AI_SERVICE_URL=http://127.0.0.1:8000` in `.env`. First startup downloads DeepFace weights (several minutes).
 
-### 7. Testing Credentials
-You can test the voter flow using the built-in mock voters:
-- **Voter 1:** `ABC1234567` (Constituency: NEW DELHI, State: DELHI)
-- **Voter 2:** `XYZ9876543` (Constituency: BANGALORE SOUTH, State: KARNATAKA)
-- **OTP:** Use `123456` for local development.
+Detailed steps: [SETUP.md](./SETUP.md).
 
-Admin credentials are set via the `SUPER_ADMIN_USERNAME` and `SUPER_ADMIN_PASSWORD` values in your `.env` file.
+### Test credentials
+
+| Role | Credentials |
+|---|---|
+| **Voter** | `ABC1234567` (Delhi) or `XYZ9876543` (Karnataka) |
+| **OTP** | `123456` in dev (also logged if SMS is mocked) |
+| **Super admin** | `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` from `.env` |
+| **Reviewer** | `REVIEWER_USERNAME` / `REVIEWER_PASSWORD` from `.env` |
+
+Create elections in **Admin → Elections** using the state/constituency dropdowns that match the test voters above.
+
+### Scripts
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Start Express + Vite dev server |
+| `npm run build` / `npm start` | Production build and serve |
+| `npm run migrate` | Apply Postgres migrations |
+| `npm run seed:admins` | Seed super admin + reviewer |
+| `npm test` | Unit tests |
+| `npm run test:integration` | Integration tests |
+
+---
+
+## Documentation
+
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Source of truth: invariants, API map, cron jobs, shortcomings
+- **[SETUP.md](./SETUP.md)** — Extended local setup (MinIO, AI, SMS, migrations)

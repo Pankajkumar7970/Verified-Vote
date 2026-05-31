@@ -1,1020 +1,555 @@
 # ARCHITECTURE.md — VerifiedVote
-# Seed this file to every AI assistant before writing any code.
-# This file is the single source of truth for all architectural decisions.
-# When in doubt, refer here before generating any code, schema, or config.
+
+**Version 2.0** — Reflects the codebase as implemented (May 2026).  
+Seed this file to every AI assistant before writing any code.  
+When in doubt, refer here before generating any code, schema, query, or config.
 
 ---
 
 ## What This Project Is
 
-VerifiedVote is a secure remote voting authorization platform that digitizes the postal ballot
-workflow for verified exceptional-case voters (disabled, military, NRI, remote workers) in India.
+VerifiedVote is a secure remote voting authorization platform that digitizes the postal ballot workflow for verified exceptional-case voters (disabled, military, NRI, remote workers) in India.
 
-It is NOT a general-purpose voting platform.
-It is NOT ECI-approved or government-certified software.
-It is a civic-tech research prototype requiring institutional approval before real election use.
+It is **NOT** a general-purpose voting platform.  
+It is **NOT** ECI-approved or government-certified software.  
+It is a **civic-tech research prototype** requiring institutional approval before real election use.
 
 ---
 
 ## What This File Is For
 
-This file exists because development is AI-assisted. Every AI assistant working on this project
-must read and follow this file before writing a single line of code, schema, query, or config.
+This file exists because development is AI-assisted. Every AI assistant working on this project must read and follow this file before writing a single line of code, schema, query, or config.
 
-Violations of rules in this file are not style issues — they are security and correctness issues.
-Do not deviate from these rules without explicit human approval and a documented reason.
+Violations of rules in this file are not style issues — they are security and correctness issues. Do not deviate from these rules without explicit human approval and a documented reason.
 
 ---
 
-## Three Services. Always Three. Never Collapse Them.
+## System Architecture
 
 ```
-[React Frontend]  →  [Node.js Backend]  →  [FastAPI AI Service]
-                           ↕                        ↕
-                    [Neon PostgreSQL]         [Neon PostgreSQL]
-                           ↕
-                     [MinIO Storage]
+┌─────────────────────────────────────────────────────────────────┐
+│  Browser (React 19 + Vite + Tailwind 4)                         │
+│  Routes: /  /otp  /dashboard  /request  /vote  /admin/*         │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ HTTP (same origin in dev/prod)
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Node.js Express (server.ts)                                    │
+│  • All business logic, auth, DB, SMS queue, MinIO, AI proxy   │
+│  • Serves Vite dev middleware (dev) or static dist (prod)       │
+│  • node-cron jobs via setInterval + Postgres advisory locks     │
+└───────┬─────────────────┬──────────────────┬──────────────────┘
+        │                 │                  │
+        ▼                 ▼                  ▼
+  PostgreSQL          MinIO (S3)      FastAPI AI Service
+  (Neon or local)     object storage   DeepFace + OpenCV
 ```
 
-| Service | Language | Deploy | Purpose |
-|---|---|---|---|
-| Frontend | React + Vite | Vercel | UI only. No business logic. |
-| Backend | Node.js + Express | Fly.io | All business logic, auth, DB, SMS |
-| AI Service | Python + FastAPI | Koyeb | Face comparison + liveness only |
+| Component | Language / Stack | Purpose |
+|---|---|---|
+| **Frontend + API host** | React + Vite + Express (`server.ts`) | UI only on the client; all validation and auth on the server |
+| **Backend logic** | TypeScript in `backend/src/` | Routes, services, cron, crypto, state machines |
+| **Database** | PostgreSQL via `pg` (node-postgres) | All persistent state; `pgcrypto` for column encryption |
+| **Object storage** | MinIO | Supporting documents, voter ID photos, baseline/voting selfies |
+| **AI service** | Python 3.11+ FastAPI | Face embedding, comparison, passive + active (blink) liveness |
+| **SMS** | TextBee adapter (dev/demo) | OTP and voting-link notifications via async queue |
 
-**Rules:**
-- Frontend NEVER calls FastAPI directly. All AI calls go through the Node backend.
-- Frontend NEVER contains business logic, validation rules, or security checks.
-- FastAPI NEVER writes to the database directly. It returns scores; Node backend decides.
-- Node backend owns all DB writes, all auth decisions, all SMS sends.
-- If you are tempted to add a fourth service, stop and ask first.
+### Hard boundaries (still enforced)
+
+- Frontend **never** calls FastAPI directly. All AI calls go through the Node backend.
+- FastAPI **never** writes to the database. It returns scores; Node decides.
+- Node backend owns all DB writes, auth decisions, and SMS queueing.
+- Do not add a fourth service without explicit approval.
 
 ---
 
-## Technology Choices — Locked. Do Not Substitute.
+## Runtime & Deployment Model
+
+The repository is a **monorepo**, not separate `frontend/` and `backend/` packages:
+
+| Path | Role |
+|---|---|
+| `server.ts` | Express entry point: API routes, health checks, cron startup, Vite/static serving |
+| `src/` | React frontend (pages, components, contexts) |
+| `backend/src/` | Express routes, services, middleware, cron, DB utilities |
+| `ai-service/` | Standalone FastAPI process (port 8000) |
+| `migrations/` | `node-pg-migrate` SQL migrations at repo root |
+
+**Development:** `npm run dev` runs `tsx server.ts`, which mounts Vite in middleware mode on port 3000.  
+**Production:** `npm run build` produces `dist/` (Vite assets + bundled `server.js`); `npm start` serves the SPA from Express.
+
+**Docker Compose** (`docker-compose.yml`) can run postgres, minio, ai-service, backend, and a preview frontend — but local dev typically runs postgres/minio/ai-service in Docker and the Node app on the host.
+
+Target production topology from the original spec (Vercel + Fly.io + Koyeb) is **aspirational**; the current code deploys as a **single Node process** plus external Postgres, MinIO, and AI service.
+
+---
+
+## Technology Stack (as implemented)
 
 ### Frontend
 ```
-React + Vite          — not Next.js, not Remix
-Tailwind CSS          — no CSS-in-JS, no styled-components
-React Router v6       — not TanStack Router
-React Query           — for all server state
-Axios                 — for all HTTP calls
-react-i18next         — for Hindi + English i18n
+React 19 + Vite 6       — SPA, not Next.js
+Tailwind CSS 4          — via @tailwindcss/vite
+React Router 7          — (spec originally said v6; codebase uses v7)
+TanStack React Query 5  — admin pages + voter dashboard server state
+Axios                   — HTTP with X-Request-ID interceptor
+react-i18next           — Hindi + English (partial coverage — see shortcomings)
+DOMPurify               — client-side sanitisation where used
+Cloudflare Turnstile    — bot protection on voter ID entry
 ```
 
 ### Backend
 ```
-Node.js + Express     — not Fastify, not Hono, not Nest.js
-pg (node-postgres)    — not Prisma, not Drizzle, not TypeORM
-bcrypt                — for all password and OTP hashing
-jsonwebtoken          — for JWT
-node-cron             — for scheduled jobs
-express-rate-limit    — for rate limiting
-sanitize-html         — for server-side input sanitisation
-multer                — for file upload handling
+Node.js + Express 4     — TypeScript via tsx (dev) / esbuild bundle (prod)
+pg (node-postgres)      — raw SQL, no ORM
+bcrypt                  — admin passwords + OTP hashing
+jsonwebtoken            — voter JWT, admin JWT, session JWT (separate secrets)
+node-cron               — NOT used directly; cron via setInterval + advisory locks
+express-rate-limit      — voter, OTP, session-ref, admin limiters
+sanitize-html + zod     — input sanitisation and schema validation
+multer                  — multipart uploads (voter request documents)
+minio SDK               — S3-compatible document storage
+helmet + cors           — security headers
 ```
 
 ### Database
 ```
-Neon PostgreSQL       — not Supabase, not PlanetScale, not MongoDB
-pgcrypto              — for all column-level encryption
-node-pg-migrate       — for migrations (not Prisma migrate)
+PostgreSQL 16           — Neon in production; Docker postgres locally
+pgcrypto extension      — pgp_sym_encrypt / pgp_sym_decrypt for PII columns
+node-pg-migrate         — migrations in /migrations/*.cjs
 ```
 
 ### AI Service
 ```
-Python 3.11+
-FastAPI               — not Flask, not Django
-DeepFace              — VGG-Face model only
-OpenCV (cv2)          — for passive liveness detection
-```
-
-### Storage
-```
-MinIO                 — not Cloudinary, not S3, not Supabase Storage
+Python 3.11+ FastAPI
+DeepFace VGG-Face       — cosine similarity for face match
+OpenCV                  — passive liveness (Laplacian + FFT) + blink detection
+Endpoints: /health, /ready, /live, /embed, /verify, /liveness/blink
 ```
 
 ### SMS
 ```
-TextBee               — for dev/demo
-MSG91                 — for production (swap via SMS_PROVIDER env var)
-```
-
-**If a library is not listed above, ask before adding it.**
-**Do not add ORMs. Do not add GraphQL. Do not add WebSockets.**
-
----
-
-## Database Rules — Read Before Touching Any Schema
-
-### Rule 1: Never put voter_id, session_id, or request_id in the votes table. Ever.
-
-```sql
--- CORRECT
-CREATE TABLE votes (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  election_id   uuid REFERENCES elections(id) NOT NULL,
-  candidate_id  uuid REFERENCES candidates(id) NOT NULL,
-  receipt_token text UNIQUE NOT NULL,
-  cast_at       timestamptz DEFAULT date_trunc('minute', now())
-);
-
--- WRONG — never do this
-CREATE TABLE votes (
-  voter_id    uuid,   -- NO
-  session_id  uuid,   -- NO
-  request_id  uuid    -- NO
-);
-```
-
-This is Invariant 1. It cannot be relaxed for any reason.
-
-### Rule 2: cast_at is always rounded to the nearest minute.
-
-```sql
--- CORRECT
-cast_at timestamptz DEFAULT date_trunc('minute', now())
-
--- WRONG
-cast_at timestamptz DEFAULT now()
-```
-
-Exact timestamps allow re-identification of voters. This is Invariant 17.
-
-### Rule 3: Use the partial unique index — not a full unique constraint.
-
-```sql
--- CORRECT
-CREATE UNIQUE INDEX unique_active_request_idx
-ON voting_requests(voter_id, election_id)
-WHERE status NOT IN ('rejected', 'withdrawn', 'appeal_resolved');
-
--- WRONG
-ALTER TABLE voting_requests
-ADD CONSTRAINT unique_active_request UNIQUE (voter_id, election_id);
-```
-
-The full constraint would prevent a voter from reapplying after rejection.
-
-### Rule 4: audit_logs and request_events are append-only. No exceptions.
-
-```sql
--- These queries are FORBIDDEN on audit_logs and request_events:
-UPDATE audit_logs ...         -- NEVER
-DELETE FROM audit_logs ...    -- NEVER
-UPDATE request_events ...     -- NEVER
-DELETE FROM request_events ... -- NEVER
-TRUNCATE audit_logs ...       -- NEVER
-```
-
-There are no exceptions. Not for cleanup. Not for testing. Not for "fixing a mistake."
-In tests, use a separate test schema or rollback transactions.
-
-### Rule 5: Insert into request_events BEFORE updating voting_requests.status.
-
-```javascript
-// CORRECT ORDER — always
-await db.query(
-  `INSERT INTO request_events
-   (request_id, old_status, new_status, actor_id, actor_type, reason)
-   VALUES ($1, $2, $3, $4, $5, $6)`,
-  [requestId, oldStatus, newStatus, actorId, actorType, reason]
-);
-await db.query(
-  `UPDATE voting_requests SET status = $1 WHERE id = $2`,
-  [newStatus, requestId]
-);
-
-// WRONG ORDER — never do this
-await db.query(`UPDATE voting_requests SET status = $1 WHERE id = $2`, [...]);
-await db.query(`INSERT INTO request_events ...`, [...]);  // too late
-```
-
-This is Invariant 13.
-
-### Rule 6: All PII columns use pgcrypto encryption.
-
-```sql
--- Encrypted columns are bytea, not text
-voter_id_enc   bytea NOT NULL  -- pgp_sym_encrypt(value, key)
-name_enc       bytea NOT NULL
-phone_enc      bytea NOT NULL
-```
-
-```sql
--- Lookup columns use SHA-256 hash, not plaintext
-voter_id_hash  text NOT NULL UNIQUE  -- sha256(voter_id)
-```
-
-Never store voter_id, name, or phone as plaintext in any column.
-
-### Rule 7: All queries use parameterised statements. No exceptions.
-
-```javascript
-// CORRECT
-await db.query('SELECT * FROM voters WHERE voter_id_hash = $1', [hash]);
-
-// WRONG — SQL injection vulnerability
-await db.query(`SELECT * FROM voters WHERE voter_id_hash = '${hash}'`);
-```
-
-### Rule 8: OTPs use bcrypt. Never SHA-256. Never plaintext.
-
-```javascript
-// CORRECT
-const otp = generateSixDigitOTP();
-const otp_hash = await bcrypt.hash(otp, 10);
-// store otp_hash in otps table; send otp via SMS
-
-// Verify:
-const valid = await bcrypt.compare(inputOtp, storedHash);
-
-// WRONG
-const otp_hash = crypto.createHash('sha256').update(otp).digest('hex'); // NO
-const otp_plaintext = otp; // ABSOLUTELY NO
-```
-
-### Rule 9: Vote submission is always a single atomic transaction.
-
-```javascript
-// CORRECT
-await db.query('BEGIN');
-try {
-  await db.query(`SELECT id FROM voting_sessions
-    WHERE id = $1 AND state = 'face_verified'
-    AND is_revoked = false AND expires_at > now() FOR UPDATE`, [sessionId]);
-  await db.query(`INSERT INTO votes ...`, [...]);
-  await db.query(`UPDATE voting_sessions SET state = 'vote_cast' ...`, [...]);
-  await db.query(`INSERT INTO audit_logs ...`, [...]);
-  await db.query('COMMIT');
-} catch (err) {
-  await db.query('ROLLBACK');
-  throw err;
-}
-
-// WRONG — separate queries without a transaction
-await db.query(`INSERT INTO votes ...`);      // partial write possible
-await db.query(`UPDATE voting_sessions ...`); // if this fails, vote exists with no invalidation
-```
-
-This is Invariant 11.
-
----
-
-## Authentication Rules
-
-### Rule 10: JWT lives in the Authorization header only. Never in cookies.
-
-```javascript
-// CORRECT — sending JWT
-headers: { 'Authorization': `Bearer ${token}` }
-
-// WRONG
-document.cookie = `token=${token}`; // NO
-localStorage.setItem('token', token); // acceptable but prefer memory/context
-```
-
-```javascript
-// CORRECT — reading JWT on backend
-const token = req.headers.authorization?.split(' ')[1];
-
-// WRONG
-const token = req.cookies.token; // NO — we do not use cookie auth
-```
-
-### Rule 11: JWT never appears in SMS messages. Use opaque ref codes.
-
-```javascript
-// CORRECT — what gets sent in SMS
-const refCode = generateOpaque12CharCode(); // e.g. "A3K9PL2MX7QR"
-const smsContent = `Your voting link: https://verifiedvote.in/vote?ref=${refCode}`;
-
-// WRONG
-const smsContent = `Your link: https://verifiedvote.in/vote?token=${jwt}`; // NO
-```
-
-### Rule 12: Every protected endpoint checks session validity before processing.
-
-```javascript
-// Required checks on every voting session endpoint
-const session = await db.query(
-  'SELECT * FROM voting_sessions WHERE id = $1', [sessionId]
-);
-if (!session.rows[0])              throw new AuthError('session_not_found');
-if (session.rows[0].is_revoked)    throw new AuthError('session_revoked');
-if (session.rows[0].expires_at < new Date()) throw new AuthError('session_expired');
-if (session.rows[0].state !== expectedState) throw new AuthError('invalid_state');
-```
-
-Never skip these checks. Never assume a valid JWT means a valid session.
-
-### Rule 13: Admin accounts are never created via API.
-
-```javascript
-// There is no POST /admin/create endpoint.
-// There is no PUT /admin/:id endpoint.
-// Admins exist only via the seed script.
-
-// If you are writing an admin creation endpoint — stop. Delete it.
+TextBee adapter         — implemented (backend/src/services/sms/textbee.adapter.ts)
+MSG91 adapter           — NOT implemented (env var documented but no adapter file)
+SMS_PROVIDER env        — documented in master prompt; send job hardcodes TextBee import
 ```
 
 ---
 
-## AI Service Rules
+## End-to-End Flows
 
-### Rule 14: FastAPI returns scores. Node backend makes decisions.
+### 1. Voter portal authentication
+1. Voter enters Voter ID + Turnstile token → `POST /api/auth/verify-voter`
+2. Backend calls `VoterVerificationService` (mock roll or Protean stub) → creates/fetches voter row
+3. OTP generated (bcrypt hash stored), SMS queued → `POST /api/auth/verify-otp` returns **voter JWT**
+4. Voter JWT stored in `localStorage` (`voter_token`); sent as `Authorization: Bearer` on `/api/voter/*` only
 
-```javascript
-// CORRECT — Node backend decides based on score
-const { face_score, liveness_score } = await callFastAPI(embedding, imageB64);
-const passed = face_score >= threshold && liveness_score >= livenessThreshold;
-if (passed) {
-  await updateSessionState(sessionId, 'face_verified');
-} else {
-  await updateSessionState(sessionId, 'face_pending');
-}
+### 2. Remote ballot request
+1. Authenticated voter selects active election → `GET /api/voter/elections`
+2. Draft saved incrementally → `POST /api/voter/request/draft` (documents to MinIO, keys encrypted at rest)
+3. Selfie captured → AI `/embed` via backend → **embedding encrypted in DB** + **selfie JPEG in MinIO** (`request_selfie_minio_key`)
+4. Submit → status `pending` → admin review queue
 
-// WRONG — FastAPI should not be making auth decisions
-// FastAPI endpoint that returns { allow: true } — NO
-// FastAPI writing to DB — NO
-// Frontend calling FastAPI directly — NO
+### 3. Admin review (multi-role)
 ```
-
-### Rule 15: FastAPI timeout always results in FACE_PENDING. Never rejection.
-
-```javascript
-// CORRECT
-try {
-  const result = await axios.post(AI_URL, payload, { timeout: 10000 });
-  // process result
-} catch (err) {
-  if (err.code === 'ECONNABORTED' || err.response?.status >= 500) {
-    await setFacePending(sessionId, 'ai_service_unavailable');
-    // notify admin dashboard
-  }
-}
-
-// WRONG
-} catch (err) {
-  await rejectSession(sessionId); // NEVER auto-reject on AI failure
-}
+draft → pending → under_review → reviewer_approved → superadmin_approved → final_approved
+                  ↘ rejected → appealed → appeal_under_review → appeal_resolved
 ```
+- Reviewer cannot set `final_approved` directly (enforced in `state-machine.ts`)
+- `request_events` row inserted **before** `voting_requests.status` update
+- On approval/rejection: supporting documents deleted from MinIO; selfie keys may persist until PII cron
 
-This is Invariant 3.
+### 4. Voting phase
+**Manual:** Super admin → `POST /api/admin/elections/:id/start-voting` (password re-entry required)  
+**Automatic:** Cron `election_start_voting` transitions `active` → `voting` when `election_date <= today`
 
-### Rule 16: Images are processed in memory only. Never written to disk in FastAPI.
+For each `final_approved` request without an existing session:
+- Creates `voting_sessions` row with opaque `ref_code`
+- Snapshots baseline embedding + MinIO key onto session
+- Queues SMS with ref code (not JWT)
 
-```python
-# CORRECT
-import numpy as np
-import cv2
-
-def process_image(image_b64: str) -> np.ndarray:
-    image_bytes = base64.b64decode(image_b64)
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    # image never touches disk
-
-# WRONG
-with open('/tmp/face.jpg', 'wb') as f:  # NO
-    f.write(base64.b64decode(image_b64))
+### 5. Live voting session (`/vote?ref=...`)
 ```
+link_opened → otp_verified → face_verified → vote_cast
+                          ↘ face_pending (AI failure or low scores)
+                          ↘ expired (timeout / cron)
+```
+1. `GET /api/session/status?ref_code=` — may return session JWT for resume
+2. `POST /api/session/resolve` — marks ref used, sends voting OTP via SMS
+3. `POST /api/session/verify-otp` — returns **session JWT** (15 min, `SESSION_JWT_SECRET`)
+4. `POST /api/session/face-verify` — compares live selfie to baseline (embedding first, MinIO photo fallback); stores voting selfie in MinIO
+5. `GET /api/vote/candidates` + `POST /api/vote/cast` — atomic transaction, receipt token returned
+
+### 6. Results
+**Manual:** Super admin publishes with password → `POST /api/admin/elections/:id/publish-results`  
+**Automatic:** Cron `election_complete` publishes when `election_date < today` and status is `voting` (no password)  
+Public tally → `GET /api/public/elections/:id/results`  
+Receipt verification → `GET /api/public/verify-receipt/:token` (returns election name + minute-rounded `cast_at` only)
 
 ---
 
-## SMS Rules
+## Session & Request State Machines
 
-### Rule 17: All SMS is abstracted through SMSService. Never call TextBee directly.
+### Voting session states (`voting_sessions.state`)
+| State | Meaning |
+|---|---|
+| `link_opened` | Ref code resolved; voter must complete OTP |
+| `otp_verified` | Ready for face verification |
+| `face_verified` | May load ballot and cast vote |
+| `face_pending` | AI unavailable or scores below threshold; admin may override |
+| `vote_cast` | Terminal — vote recorded |
+| `expired` | Terminal — window elapsed or election ended |
 
-```javascript
-// CORRECT
-import { SMSService } from '../services/sms.service';
-await SMSService.send(phoneNumber, message);
-
-// WRONG — hardcoding provider
-await axios.post('https://textbee.dev/api/v1/gateway/devices/.../sendMessage', ...); // NO
-```
-
-The SMS_PROVIDER env var switches providers without touching business logic.
-
-### Rule 18: Failed SMS sends are retried via the notifications table. Not inline.
-
-```javascript
-// CORRECT — fire and handle failure via DB
-const notification = await createNotification(voterId, type, 'pending');
-try {
-  await SMSService.send(phone, message);
-  await markNotificationSent(notification.id);
-} catch (err) {
-  await markNotificationFailed(notification.id, err.message);
-  // cron job picks this up in 5 minutes
-}
-
-// WRONG — blocking retry in request handler
-for (let i = 0; i < 3; i++) {
-  try { await SMSService.send(...); break; }
-  catch { await sleep(2000); } // DO NOT block the request handler
-}
-```
+### Election states (`elections.status`)
+| State | Meaning |
+|---|---|
+| `draft` | Created, not accepting requests |
+| `active` | Accepting remote ballot requests |
+| `voting` | Approved voters may cast ballots |
+| `results_published` | Tally public; PII retention clock starts |
 
 ---
 
-## File Storage Rules
+## API Surface (summary)
 
-### Rule 19: Documents are stored in MinIO. Cloudinary is not used. S3 is not used.
-
-```javascript
-// CORRECT
-import { MinIOService } from '../services/minio.service';
-const { key, hash } = await MinIOService.uploadDocument(fileBuffer, mimeType);
-
-// WRONG
-import cloudinary from 'cloudinary'; // NOT IN THIS PROJECT
-await s3.putObject(...);             // NOT IN THIS PROJECT
-```
-
-### Rule 20: Signed URLs only. Never public URLs. Never permanent URLs.
-
-```javascript
-// CORRECT — 15-minute signed URL for admin document review
-const signedUrl = await MinIOService.getSignedUrl(docKey, 900);
-
-// WRONG
-const publicUrl = `https://storage.example.com/bucket/${docKey}`; // NO permanent URLs
-```
-
-### Rule 21: MinIO documents are deleted immediately after admin review.
-
-```javascript
-// CORRECT — delete on approval OR rejection
-async function approveRequest(requestId, adminId) {
-  const request = await getRequest(requestId);
-  await MinIOService.deleteDocument(request.doc_minio_key);
-  await db.query(`UPDATE voting_requests SET doc_minio_key = null WHERE id = $1`, [requestId]);
-  // ... rest of approval logic
-}
-
-// WRONG — keeping the document after review
-// "We'll delete it later" — NO. Delete immediately.
-```
-
-### Rule 22: Selfies are never stored. Embeddings only.
-
-```javascript
-// CORRECT — extract embedding, discard image
-const embedding = await callFastAPI_getEmbedding(imageB64);
-const embeddingEnc = await pgcryptoEncrypt(JSON.stringify(embedding), key);
-await db.query(
-  `UPDATE voting_requests SET request_selfie_embedding_enc = $1 WHERE id = $2`,
-  [embeddingEnc, requestId]
-);
-// imageB64 is now garbage-collected — never written anywhere
-
-// WRONG
-await fs.writeFile(`/uploads/${requestId}.jpg`, imageBuffer); // NO
-await MinIOService.upload(imageBuffer); // NO — selfies never stored
-```
+| Prefix | Auth | Purpose |
+|---|---|---|
+| `/api/auth/*` | Turnstile + rate limit | Voter ID verify, OTP send/verify/resend |
+| `/api/voter/*` | Voter JWT | Dashboard, draft/submit requests, appeals, withdraw |
+| `/api/session/*` | Ref code / Session JWT | Voting link resolve, OTP, face verify |
+| `/api/vote/*` | Session JWT (`face_verified`) | Candidates list, cast vote |
+| `/api/public/*` | None | Published results, receipt verification |
+| `/api/admin/auth/*` | — | Admin login |
+| `/api/admin/requests/*` | Admin JWT | Review queue, approve/reject/appeal |
+| `/api/admin/elections/*` | Admin JWT (+ password on critical actions) | CRUD, activate, start voting, publish results |
+| `/api/admin/parties/*` | Admin JWT | Party management |
+| `/api/admin/sessions/*` | Admin JWT | View/revoke voting sessions, face-pending review |
+| `/api/admin/audit/*` | Admin JWT | Append-only audit log read |
+| `/api/admin/cron/*` | Admin JWT | Cron job status dashboard |
+| `/api/admin/verification/*` | Admin JWT | Per-election verification stats |
+| `/api/admin/docs/*` | Admin JWT | Signed URL document preview |
+| `/api/admin/geo/*` | Admin JWT | India state/constituency lookup |
+| `/api/health`, `/api/ready`, `/api/live`, `/api/startup-status` | None | Observability |
 
 ---
 
-## Cron Job Rules
+## Database Schema (key tables)
 
-### Rule 23: Every cron job uses the advisory lock pattern.
+| Table | Purpose |
+|---|---|
+| `voters` | `voter_id_hash` lookup + encrypted PII (`*_enc` bytea columns) |
+| `elections` / `election_settings` / `candidates` / `parties` | Election configuration |
+| `voting_requests` | Ballot authorization requests + encrypted embeddings + encrypted MinIO keys |
+| `request_events` | Append-only status transition log |
+| `voting_sessions` | One session per approved request; ref codes, face scores, baseline snapshot |
+| `votes` | **No voter/session/request FK** — only `election_id`, `candidate_id`, `receipt_token`, `cast_at` |
+| `otps` | bcrypt-hashed OTPs with attempt counts |
+| `notifications` | Async SMS queue (`pending` → `sent` / `failed`) |
+| `verification_logs` | Face verification attempts with scores/thresholds |
+| `audit_logs` | Append-only admin/system actions |
+| `cron_jobs` | Last run status per job (updated by `runWithLock`) |
+| `admins` | Seeded only — no create/update API |
 
-```javascript
-// CORRECT
-import { runWithLock } from '../utils/cron-lock';
-
-cron.schedule('* * * * *', () => runWithLock('expire_sessions', expireSessions));
-cron.schedule('0 2 * * *', () => runWithLock('delete_pii', deletePIIData));
-
-// WRONG — no lock
-cron.schedule('* * * * *', expireSessions); // race condition on multiple instances
-```
-
-### Rule 24: Every cron job is idempotent.
-
-```javascript
-// CORRECT — safe to run multiple times
-async function expireSessions() {
-  await db.query(`
-    UPDATE voting_sessions
-    SET state = 'expired'
-    WHERE state NOT IN ('vote_cast', 'expired')
-      AND expires_at < now()
-  `);
-  // Running this 10 times has the same result as running it once
-}
-
-// WRONG — not idempotent
-async function expireSessions() {
-  const sessions = await db.query(`SELECT id FROM voting_sessions WHERE ...`);
-  for (const s of sessions.rows) {
-    await sendExpiryEmail(s.id); // running twice sends the email twice — BAD
-  }
-}
-```
-
-### Rule 25: cron_jobs table is updated on every run.
-
-```javascript
-// Inside runWithLock — already handles this, but all job functions must not skip it
-// The runWithLock utility updates cron_jobs automatically — always use it
-```
+### Schema additions beyond initial migration
+- `voting_requests.voter_id_photo_minio_key`, `request_selfie_minio_key`
+- `voting_sessions.voting_selfie_minio_key`, `baseline_embedding_enc`, `baseline_selfie_minio_key`
+- `notifications.metadata` (pgcrypto-encrypted JSON for SMS template vars)
 
 ---
 
-## Input Sanitisation Rules
+## Cron Jobs
 
-### Rule 26: All free-text inputs are sanitised on both frontend and backend.
+All jobs use Postgres **advisory locks** via `backend/src/cron/lock.ts` and update `cron_jobs`.
 
-```javascript
-// Backend — sanitise before DB write
-import sanitizeHtml from 'sanitize-html';
+| Job name | Interval | Purpose |
+|---|---|---|
+| `send_sms` | 1 min | Process `notifications` queue via TextBee |
+| `retry_sms` | 5 min | Retry failed SMS |
+| `expire_sessions` | 1 min | Mark expired sessions |
+| `purge_otps` | 1 hr | Delete stale OTP rows |
+| `delete_pii` | 24 hr | Purge voter PII, embeddings, MinIO selfies 30 days after results |
+| `purge_old_requests` | 24 hr | Clean withdrawn/rejected request artifacts |
+| `cleanup_draft_elections` | 24 hr | Remove stale draft elections |
+| `election_start_voting` | 1 hr | Auto-start voting on election date |
+| `election_complete` | 1 hr | Auto-publish results day after election date |
+| `purge_audit_logs` | 24 hr | Delete audit logs >1 year (**opt-in**, see shortcomings) |
 
-function sanitiseText(input) {
-  return sanitizeHtml(input, { allowedTags: [], allowedAttributes: {} });
-}
-
-// Usage — every free-text field
-const reasonDetail = sanitiseText(req.body.reason_detail);
-const reviewNote   = sanitiseText(req.body.review_note);
-```
-
-```javascript
-// Frontend — sanitise before rendering user-supplied content
-import DOMPurify from 'dompurify';
-const safeContent = DOMPurify.sanitize(userSuppliedString);
-```
-
-### Rule 27: File uploads are validated before processing.
-
-```javascript
-// CORRECT
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
-const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
-
-function validateUpload(file) {
-  if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) throw new Error('invalid_file_type');
-  if (file.size > MAX_SIZE_BYTES) throw new Error('file_too_large');
-}
-
-// WRONG — no validation
-app.post('/upload', upload.single('doc'), async (req, res) => {
-  await MinIOService.upload(req.file.buffer); // without validation — NO
-});
-```
+Crons start only after DB connectivity is confirmed (`waitForDbThenStartCrons` in `server.ts`).
 
 ---
 
-## Rate Limiting Rules
-
-### Rule 28: Rate limits are applied as middleware, not inside route handlers.
-
-```javascript
-// CORRECT — applied at router level
-import rateLimit from 'express-rate-limit';
-
-const verifyVoterLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  handler: (req, res) => {
-    logRateLimitHit(req); // log to audit_logs
-    res.status(429).json({ error: 'too_many_requests' });
-  }
-});
-
-router.post('/auth/verify-voter', verifyVoterLimiter, verifyVoterHandler);
-
-// WRONG — rate limiting inside handler
-async function verifyVoterHandler(req, res) {
-  const attempts = await countRecentAttempts(req.ip); // manual counting — fragile
-  if (attempts > 5) return res.status(429)...;
-}
-```
-
----
-
-## Accessibility Rules
-
-### Rule 29: i18n is used for every user-facing string. No hardcoded English.
-
-```javascript
-// CORRECT
-import { useTranslation } from 'react-i18next';
-const { t } = useTranslation();
-<button>{t('auth.verifyVoter')}</button>
-
-// WRONG
-<button>Verify Voter ID</button>  // hardcoded — NO
-```
-
-### Rule 30: Every interactive element has an ARIA label.
-
-```jsx
-// CORRECT
-<button aria-label={t('ballot.submitVote')}>
-  {t('ballot.submitVote')}
-</button>
-
-<input
-  type="text"
-  id="voter-id-input"
-  aria-label={t('auth.voterIdLabel')}
-  aria-describedby="voter-id-hint"
-/>
-
-// WRONG
-<button>Submit</button>              // no aria-label — NO
-<input type="text" />               // no label — NO
-```
-
-### Rule 31: Form validation errors use aria-live.
-
-```jsx
-// CORRECT
-<div role="alert" aria-live="polite">
-  {error && <span>{t(error)}</span>}
-</div>
-
-// WRONG
-{error && <p style={{color: 'red'}}>{error}</p>}  // not announced to screen readers
-```
-
----
-
-## Error Handling Rules
-
-### Rule 32: Every API endpoint returns structured error responses.
-
-```javascript
-// CORRECT — consistent error shape
-res.status(400).json({
-  error: 'invalid_voter_id',       // machine-readable code
-  message: t('errors.invalidVoterId'), // human-readable (for logging)
-  request_id: req.requestId       // correlation ID
-});
-
-// WRONG — inconsistent shapes
-res.status(400).json({ msg: 'bad request' });     // inconsistent key
-res.status(400).send('Invalid voter ID');          // plain string
-res.status(500).json({ error: err.message });      // leaks internal details
-```
-
-### Rule 33: Internal errors are logged but never leaked to the client.
-
-```javascript
-// CORRECT
-try {
-  await db.query(...);
-} catch (err) {
-  logger.error({ request_id: req.requestId, error: err.message, stack: err.stack });
-  res.status(500).json({ error: 'internal_error', request_id: req.requestId });
-}
-
-// WRONG
-} catch (err) {
-  res.status(500).json({ error: err.message }); // leaks DB errors, stack traces — NO
-}
-```
-
-### Rule 34: AI failure paths always result in FACE_PENDING, not rejection.
-
-Already covered in Rule 15. Restated here because it must never be forgotten.
-If FastAPI is down, if the model crashes, if the score is ambiguous — the voter
-is flagged for human review. The voter is never automatically denied their vote
-due to a technical failure. This is non-negotiable.
-
----
-
-## Observability Rules
-
-### Rule 35: Every request gets a correlation ID.
-
-```javascript
-// CORRECT — middleware applied globally
-app.use((req, res, next) => {
-  req.requestId = req.headers['x-request-id'] || crypto.randomUUID();
-  res.setHeader('x-request-id', req.requestId);
-  next();
-});
-
-// When calling FastAPI
-await axios.post(AI_URL, payload, {
-  headers: { 'X-Request-ID': req.requestId }
-});
-```
-
-### Rule 36: All logs are structured JSON.
-
-```javascript
-// CORRECT
-logger.info({
-  timestamp: new Date().toISOString(),
-  level: 'info',
-  request_id: req.requestId,
-  service: 'node-backend',
-  action: 'otp_verified',
-  voter_id: voterId,
-  message: 'OTP verified successfully'
-});
-
-// WRONG
-console.log('OTP verified for voter ' + voterId); // unstructured — NO
-console.log('Error:', err);                        // unstructured — NO
-```
-
-### Rule 37: /health, /ready, /live endpoints exist on both services.
-
-```javascript
-// Node backend
-app.get('/health', async (req, res) => {
-  const dbOk = await checkDB();
-  const smsOk = await checkSMS();
-  const aiOk  = await checkAI();
-  res.json({ status: 'ok', db: dbOk, sms: smsOk, ai_service: aiOk });
-});
-
-app.get('/ready', async (req, res) => {
-  const allOk = await checkAllDependencies();
-  res.status(allOk ? 200 : 503).json({ ready: allOk });
-});
-
-app.get('/live', (req, res) => res.json({ alive: true }));
-```
-
----
-
-## Multi-Admin Approval Rules
-
-### Rule 38: Reviewer actions never trigger final_approved directly.
-
-```
-Reviewer can set:     under_review, reviewer_approved, rejected
-Super Admin can set:  superadmin_approved, final_approved, rejected, appeal actions
-
-No single admin can move a request from pending to final_approved alone.
-```
-
-```javascript
-// CORRECT — check role before allowing status transition
-async function updateRequestStatus(requestId, newStatus, adminId, adminRole) {
-  const allowed = getAllowedTransitions(adminRole);
-  if (!allowed.includes(newStatus)) {
-    throw new ForbiddenError('role_insufficient_for_transition');
-  }
-  // proceed
-}
-
-// WRONG — no role check on status update
-await db.query(`UPDATE voting_requests SET status = $1 WHERE id = $2`, [newStatus, requestId]);
-```
-
----
-
-## What AI Assistants Must NOT Do
-
-The following are explicitly forbidden. If an AI assistant generates any of these,
-the output must be rejected and the assistant corrected.
-
-```
-❌ Add voter_id, session_id, or request_id to the votes table
-❌ Store OTPs in plaintext or with SHA-256
-❌ Use SHA-256 alone for password or OTP hashing (use bcrypt)
-❌ Call FastAPI from the frontend
-❌ Auto-reject a voter when FastAPI fails
-❌ Add an admin creation or update endpoint
-❌ Store selfie images (embeddings only)
-❌ Use Cloudinary (MinIO only)
-❌ Use an ORM (Prisma, Drizzle, TypeORM, Sequelize)
-❌ Write direct SQL string concatenation (parameterised queries only)
-❌ Add UPDATE or DELETE on audit_logs or request_events
-❌ Update voting_requests.status before inserting into request_events
-❌ Use exact timestamps for cast_at (date_trunc('minute', now()) only)
-❌ Use cookies for JWT storage
-❌ Send JWT in an SMS message
-❌ Use a full UNIQUE constraint instead of partial unique index on voting_requests
-❌ Skip the advisory lock on cron jobs
-❌ Write non-idempotent cron jobs
-❌ Hardcode any user-facing string (use i18n keys)
-❌ Add a fourth service without explicit approval
-❌ Switch any locked dependency without explicit approval
-❌ Skip ARIA labels on interactive elements
-❌ Skip sanitisation on any free-text field
-❌ Expose internal error messages or stack traces to the client
-❌ Skip the atomic transaction on vote submission
-❌ Allow a single admin to move a request to final_approved
-```
-
----
-
-## File and Folder Structure
+## File & Folder Structure (actual)
 
 ```
 verifiedvote/
-├── frontend/                        # React + Vite
-│   ├── public/
-│   ├── src/
-│   │   ├── components/              # Reusable UI components
-│   │   │   ├── ui/                  # Base components (Button, Input, etc.)
-│   │   │   └── features/            # Feature-specific components
-│   │   ├── pages/                   # Route-level pages
-│   │   │   ├── voter/               # Voter-facing pages
-│   │   │   └── admin/               # Admin-facing pages
-│   │   ├── hooks/                   # Custom React hooks
-│   │   ├── services/                # Axios API calls
-│   │   ├── store/                   # React context providers
-│   │   │   ├── AuthContext.jsx
-│   │   │   ├── FontSizeContext.jsx
-│   │   │   └── ThemeContext.jsx
-│   │   ├── i18n/
-│   │   │   ├── en.json
-│   │   │   └── hi.json
-│   │   ├── utils/
-│   │   └── App.jsx
-│   ├── index.html
-│   └── vite.config.js
-│
-├── backend/                         # Node.js + Express
-│   ├── src/
-│   │   ├── routes/                  # Express routers
-│   │   │   ├── auth.routes.js
-│   │   │   ├── voter.routes.js
-│   │   │   ├── request.routes.js
-│   │   │   ├── session.routes.js
-│   │   │   ├── vote.routes.js
-│   │   │   └── admin/
-│   │   │       ├── election.routes.js
-│   │   │       ├── party.routes.js
-│   │   │       ├── request-review.routes.js
-│   │   │       └── audit.routes.js
-│   │   ├── controllers/             # Route handlers (thin — call services)
-│   │   ├── services/                # All business logic
-│   │   │   ├── auth.service.js
-│   │   │   ├── otp.service.js       # bcrypt OTP hashing + verification
-│   │   │   ├── voter-verify/
-│   │   │   │   ├── index.js         # VoterVerificationService interface
-│   │   │   │   ├── mock.adapter.js  # MockAdapter
-│   │   │   │   └── protean.adapter.js
-│   │   │   ├── sms/
-│   │   │   │   ├── index.js         # SMSService interface
-│   │   │   │   ├── textbee.adapter.js
-│   │   │   │   └── msg91.adapter.js
-│   │   │   ├── minio.service.js
-│   │   │   ├── face-verify.service.js  # calls FastAPI; handles timeout → FACE_PENDING
-│   │   │   ├── session.service.js
-│   │   │   ├── vote.service.js      # atomic transaction
-│   │   │   └── results.service.js
-│   │   ├── middleware/
-│   │   │   ├── auth.middleware.js   # JWT + is_revoked check
-│   │   │   ├── rate-limit.middleware.js
-│   │   │   ├── turnstile.middleware.js
-│   │   │   ├── sanitise.middleware.js
-│   │   │   ├── upload.middleware.js
-│   │   │   └── request-id.middleware.js
-│   │   ├── db/
-│   │   │   ├── index.js             # pg pool
-│   │   │   ├── migrations/          # node-pg-migrate files
-│   │   │   └── seed/
-│   │   │       ├── admin.seed.js
-│   │   │       └── voter_roll.json  # MockAdapter test data
-│   │   ├── cron/
-│   │   │   ├── lock.js              # runWithLock utility
-│   │   │   ├── expire-sessions.job.js
-│   │   │   ├── delete-pii.job.js
-│   │   │   ├── retry-sms.job.js
-│   │   │   ├── purge-otps.job.js
-│   │   │   └── purge-audit-logs.job.js
-│   │   ├── utils/
-│   │   │   ├── crypto.js            # pgcrypto helpers
-│   │   │   ├── logger.js            # structured JSON logger
-│   │   │   └── errors.js            # custom error classes
-│   │   └── app.js
-│   ├── .env.example
-│   └── package.json
-│
-├── ai-service/                      # Python FastAPI
-│   ├── main.py                      # FastAPI app + /verify + /health
-│   ├── liveness.py                  # OpenCV passive liveness detection
-│   ├── models.py                    # Pydantic request/response models
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-└── ARCHITECTURE.md                  # This file — seed to all AI assistants
+├── server.ts                    # Express + Vite/static + cron bootstrap
+├── src/                         # React frontend
+│   ├── App.tsx                  # Routes (voter + admin)
+│   ├── main.tsx                 # QueryClientProvider + i18n
+│   ├── components/              # SelfieCapture, VoterRoute, ErrorBoundary, …
+│   ├── pages/
+│   │   ├── voter/               # Dashboard, RequestForm, VotingSession, Ballot, …
+│   │   └── admin/               # RequestQueue, Elections, Audit, Sessions, Cron, …
+│   ├── store/                   # AuthContext, VoterContext, FontSizeContext
+│   └── utils/                   # votingSessionApi, voterToken
+├── backend/src/
+│   ├── routes/                  # auth, voter, session, vote, public, admin/*
+│   ├── services/
+│   │   ├── face-verify.service.ts
+│   │   ├── minio.service.ts
+│   │   ├── otp.service.ts
+│   │   ├── verification-log.service.ts
+│   │   ├── india-geo.service.ts
+│   │   ├── sms/                 # textbee.adapter, notification-queue, templates
+│   │   └── voter-verify/        # mock.adapter, protean.adapter (stub)
+│   ├── middleware/              # auth, session, rate-limit, turnstile, validate, error
+│   ├── cron/                    # All scheduled jobs + lock.ts
+│   ├── db/                      # pg pool, seed (admin.seed.ts, voter_roll.json)
+│   ├── utils/                   # crypto, logger, errors, state-machine, ref-code, receipt-token
+│   └── constants/               # system.ts, verification.ts
+├── ai-service/
+│   ├── main.py                  # FastAPI app
+│   ├── liveness.py
+│   └── models.py
+├── migrations/                  # node-pg-migrate *.cjs
+├── tests/                       # Playwright e2e
+├── docker-compose.yml
+└── ARCHITECTURE.md
 ```
 
 ---
 
 ## The 17 Invariants
 
-These are absolute. No invariant can be broken for any reason without
-explicit documented approval from the project owner.
+These remain the **design intent**. See [Known Shortcomings & Assumptions](#known-shortcomings--assumptions) where implementation diverges.
 
 | # | Invariant |
 |---|---|
 | 1 | Votes table never contains voter_id, session_id, or any linkable field |
-| 2 | JWT never sent over SMS, email, or any unencrypted channel |
-| 3 | A voter is never auto-rejected due to AI service failure — always FACE_PENDING |
-| 4 | Face embeddings are request-scoped; nulled immediately on rejection or withdrawal |
-| 5 | Admin accounts seeded only; no API endpoint creates or modifies admins |
-| 6 | Results are system-computed from votes table; never entered manually |
-| 7 | audit_logs and request_events are append-only; no UPDATE or DELETE via any API |
-| 8 | All cron jobs are idempotent and protected by Postgres advisory locks |
-| 9 | Constituency validation enforced server-side and at DB query level |
+| 2 | JWT never sent over SMS — opaque ref codes only |
+| 3 | Voter never auto-rejected due to AI failure — always `face_pending` |
+| 4 | Face embeddings nulled on rejection/withdrawal/PII purge |
+| 5 | Admin accounts seeded only; no API creates or modifies admins |
+| 6 | Results computed from votes table; never manually entered |
+| 7 | `audit_logs` and `request_events` append-only via API |
+| 8 | Cron jobs idempotent + Postgres advisory locks |
+| 9 | Constituency validation enforced server-side |
 | 10 | Accessibility (i18n, font size, ARIA, high contrast) built from Phase 1 |
-| 11 | Vote submission is a single atomic DB transaction; no partial writes |
-| 12 | OTPs stored as bcrypt hash only; never plaintext or SHA-256; invalidated on resend or use |
-| 13 | request_events row inserted BEFORE voting_requests.status is updated |
-| 14 | MinIO document URLs are signed, short-lived, never publicly accessible |
-| 15 | Critical actions (result publication, election activation) require password re-entry |
-| 16 | Every protected endpoint checks is_revoked = false before processing |
-| 17 | cast_at in votes table is rounded to nearest minute; never exact timestamp |
+| 11 | Vote submission is a single atomic DB transaction |
+| 12 | OTPs stored as bcrypt hash only |
+| 13 | `request_events` inserted BEFORE `voting_requests.status` update |
+| 14 | MinIO document URLs are signed, short-lived |
+| 15 | Critical admin actions require password re-entry |
+| 16 | Protected endpoints check `is_revoked = false` |
+| 17 | `cast_at` rounded to nearest minute (`date_trunc('minute', now())`) |
+
+---
+
+## Security & Correctness Rules
+
+### Database
+
+**Votes table — no linkable fields (Invariant 1)**
+```sql
+CREATE TABLE votes (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  election_id   uuid REFERENCES elections(id) NOT NULL,
+  candidate_id  uuid REFERENCES candidates(id) NOT NULL,
+  receipt_token text UNIQUE NOT NULL,  -- SHA-256 hash of display token
+  cast_at       timestamptz DEFAULT date_trunc('minute', now())
+);
+```
+
+**Partial unique index on active requests**
+```sql
+CREATE UNIQUE INDEX unique_active_request_idx
+ON voting_requests(voter_id, election_id)
+WHERE status NOT IN ('rejected', 'withdrawn', 'appeal_resolved');
+```
+
+**PII encryption** — `voter_id_enc`, `name_enc`, `phone_enc` as `bytea` via `pgp_sym_encrypt`; lookup via `voter_id_hash` (SHA-256).
+
+**Parameterised queries only.** No string concatenation in SQL.
+
+**OTP bcrypt only** — never SHA-256 or plaintext storage.
+
+**Vote cast atomic transaction** — see `backend/src/routes/vote.routes.ts` (`db.withTransaction`).
+
+### Authentication
+
+- JWT in `Authorization: Bearer` header only — no cookie auth
+- Three JWT secrets: `VOTER_JWT_SECRET`, `ADMIN_JWT_SECRET`, `SESSION_JWT_SECRET`
+- Voter JWT → portal (`/api/voter/*`); Session JWT → voting (`/api/session/*`, `/api/vote/*`)
+- Session middleware validates existence, expiry, revocation, and expected state
+
+### AI service
+
+- Node backend calls FastAPI with 10s timeout (`AI_TIMEOUT_MS`); retries transient errors twice
+- On failure → session state `face_pending`, never auto-reject (Invariant 3)
+- FastAPI processes request images in memory; warmup writes a dummy 224×224 JPEG to temp dir then deletes it
+
+### File storage
+
+- MinIO keys stored **encrypted** in DB (`encryptDocKey`); signed URLs for admin preview (15 min)
+- Supporting documents deleted on admin approval/rejection
+- **Selfies:** embeddings in DB + JPEG in MinIO (see shortcomings — original spec said embeddings only)
+
+### SMS
+
+- Notifications queued in DB; `send_sms` cron sends asynchronously
+- Failed sends retried by `retry_sms` cron — not inline in request handlers
+
+---
+
+## Known Shortcomings & Assumptions
+
+This section documents gaps between the **original master spec** and **current implementation**. Treat these as technical debt or explicit prototype trade-offs — not as approved permanent design.
+
+### Identity & electoral roll
+| Item | Assumption / gap |
+|---|---|
+| **Mock voter roll** | Default `VOTER_VERIFY_MODE=mock` uses `backend/src/db/seed/voter_roll.json` — not a live ECI integration |
+| **Protean adapter** | `protean.adapter.ts` is a stub; throws `protean_adapter_not_implemented` |
+| **Dev OTP** | Mock mode uses fixed OTP `123456`; logged to console when TextBee keys absent |
+| **Voter ID format** | Client validates `^[A-Za-z]{3}.{7}$`; server normalises to uppercase before hash |
+
+### Biometrics & storage
+| Item | Assumption / gap |
+|---|---|
+| **Selfies in MinIO** | Request baseline and voting-time selfies are stored as encrypted MinIO keys (`request_selfie_minio_key`, `voting_selfie_minio_key`), not embeddings-only as Rule 22 originally stated |
+| **Dual baseline path** | Face verify prefers encrypted embedding; falls back to MinIO JPEG if embedding decrypt/AI fails |
+| **Blink liveness fail-open** | If AI blink endpoint unavailable, backend returns `blink_detected: true` so voters are not blocked |
+| **Passive liveness** | OpenCV heuristics (not certified presentation-attack detection); suitable for prototype only |
+| **DeepFace warm-up** | Writes one dummy image to OS temp during startup (no biometric data) |
+| **Admin session review** | Admins can view signed URLs for request + voting selfies in `AdminSessions` |
+
+### Security & compliance
+| Item | Assumption / gap |
+|---|---|
+| **Voter JWT in localStorage** | Portal token persisted across refreshes; XSS would expose it (session JWT is memory-only on client via VotingSession flow) |
+| **Audit log deletion** | `purge_audit_logs` cron **DELETE**s rows older than 1 year when `ENABLE_AUDIT_LOG_PURGE=true` — contradicts strict append-only Rule 4 |
+| **Auto result publication** | Cron publishes results without admin password — bypasses Invariant 15 for the automated path |
+| **Auto start voting** | Cron can transition elections to `voting` without explicit admin action on election day |
+| **i18n incomplete** | Many voter-facing strings in `App.tsx` and elsewhere are hardcoded English despite Rule 29 |
+| **ARIA coverage** | Partial; not every interactive element has an aria-label (Rule 30) |
+| **No WebSocket** | Correct per spec; all polling/refetch via React Query or manual fetch |
+
+### Infrastructure & integrations
+| Item | Assumption / gap |
+|---|---|
+| **SMS abstraction incomplete** | `send-sms.job.ts` imports `TextBeeAdapter` directly; no `SMSService` factory or MSG91 adapter despite env documentation |
+| **Single Node deployment** | Production build bundles frontend into Express; original three-host deploy (Vercel/Fly/Koyeb) not codified |
+| **Neon cold start** | DB pool timeout 30s; crons retry until DB available; `db:keep-alive` script exists for Neon free tier |
+| **SQLite artifact** | `backend/sqlite.db` may exist locally — not used by application code (Postgres only) |
+| **Test coverage** | Unit test for ref-code; integration test file exists; Playwright e2e partially configured |
+
+### Data lifecycle assumptions
+| Item | Assumption / gap |
+|---|---|
+| **PII retention** | Voter PII nulled 30 days after `results_published_at` (or `data_expires_at` if set) |
+| **Embeddings cleared** | Same cron clears `request_selfie_embedding_enc` and deletes MinIO selfies |
+| **Receipt tokens** | Display token shown once; only SHA-256 hash stored — voter cannot recover lost receipt |
+| **Minute-rounded timestamps** | Reduces re-identification risk but does not eliminate it in small electorates |
+
+### Operational assumptions
+| Item | Assumption / gap |
+|---|---|
+| **Clock sync** | Session expiry and OTP validity assume reasonably synchronised server clocks |
+| **Single-region** | No multi-region failover, read replicas, or split-brain handling documented |
+| **Rate limits** | IP-based; may affect shared NAT users |
+| **Admin roles** | Two seeded roles (`super_admin`, `reviewer`); no fine-grained RBAC beyond state machine |
+| **Institutional approval** | System must not be used for real elections without legal and ECI review |
+
+---
+
+## Environment Variables (reference)
+
+See `.env.example` for the full list. Critical vars:
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Postgres connection (use Neon pooler host in prod) |
+| `PGCRYPTO_KEY` | Symmetric key for pgp_sym_encrypt columns |
+| `VOTER_JWT_SECRET` / `ADMIN_JWT_SECRET` / `SESSION_JWT_SECRET` | Separate signing keys (min 32 chars) |
+| `VOTER_VERIFY_MODE` | `mock` (default) or `protean` |
+| `AI_SERVICE_URL` | FastAPI base URL; omit disables face verify health |
+| `MINIO_*` | Object storage endpoint and bucket |
+| `TEXTBEE_API_KEY` / `TEXTBEE_DEVICE_ID` | SMS; absent → console mock |
+| `TURNSTILE_SECRET_KEY` | Server-side Turnstile verify; test keys in .env.example |
+| `ENABLE_AUDIT_LOG_PURGE` | Set `true` to enable audit log deletion cron |
+
+---
+
+## What AI Assistants Must NOT Do
+
+```
+❌ Add voter_id, session_id, or request_id to the votes table
+❌ Store OTPs in plaintext or with SHA-256 alone
+❌ Call FastAPI from the frontend
+❌ Auto-reject a voter when FastAPI fails
+❌ Add an admin creation or update endpoint
+❌ Use Cloudinary or raw S3 SDK (MinIO only)
+❌ Add an ORM (Prisma, Drizzle, TypeORM)
+❌ Use SQL string concatenation
+❌ Add UPDATE or DELETE on request_events via API
+❌ Update voting_requests.status before inserting request_events
+❌ Use exact timestamps for cast_at
+❌ Use cookies for JWT storage
+❌ Send JWT in an SMS message
+❌ Skip advisory locks on cron jobs
+❌ Expose internal error messages to the client
+❌ Skip atomic transaction on vote submission
+❌ Allow a single reviewer to set final_approved
+❌ Add a fourth service without explicit approval
+❌ Switch locked dependencies without explicit approval
+```
 
 ---
 
 ## Quick Reference — Common Patterns
 
-### Encrypt a PII value before storing
-```javascript
-// utils/crypto.js
-export async function encryptValue(plaintext) {
+### Encrypt PII
+```typescript
+// backend/src/utils/crypto.ts
+export async function encryptValue(plaintext: string): Promise<Buffer> {
   const result = await db.query(
     `SELECT pgp_sym_encrypt($1, $2) AS encrypted`,
     [plaintext, process.env.PGCRYPTO_KEY]
   );
   return result.rows[0].encrypted;
 }
-
-export async function decryptValue(encrypted) {
-  const result = await db.query(
-    `SELECT pgp_sym_decrypt($1, $2) AS decrypted`,
-    [encrypted, process.env.PGCRYPTO_KEY]
-  );
-  return result.rows[0].decrypted;
-}
 ```
 
-### Hash a Voter ID for lookup
-```javascript
+### Hash voter ID for lookup
+```typescript
 import crypto from 'crypto';
-export function hashVoterId(voterId) {
+export function hashVoterId(voterId: string): string {
   return crypto.createHash('sha256').update(voterId.toUpperCase()).digest('hex');
 }
 ```
 
-### Hash and verify an OTP
-```javascript
-import bcrypt from 'bcrypt';
-export const hashOTP   = (otp)          => bcrypt.hash(otp, 10);
-export const verifyOTP = (otp, hash)    => bcrypt.compare(otp, hash);
+### Record request status change (events BEFORE status update)
+```typescript
+await db.query(
+  `INSERT INTO request_events
+   (request_id, old_status, new_status, actor_id, actor_type, reason, metadata)
+   VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+  [requestId, oldStatus, newStatus, actorId, actorType, reason, metadata ?? null]
+);
+await db.query(`UPDATE voting_requests SET status = $1 WHERE id = $2`, [newStatus, requestId]);
 ```
 
-### Insert a request_event (always call before status update)
-```javascript
-export async function recordStatusChange(db, { requestId, oldStatus, newStatus, actorId, actorType, reason, metadata }) {
-  await db.query(
-    `INSERT INTO request_events
-     (request_id, old_status, new_status, actor_id, actor_type, reason, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [requestId, oldStatus, newStatus, actorId, actorType, reason, metadata ?? null]
-  );
-}
-```
+### Cron job with advisory lock
+```typescript
+import { runWithLock } from '../cron/lock.js';
 
-### Log to audit_logs
-```javascript
-export async function auditLog(db, { actorType, actorId, action, entityType, entityId, metadata, ipAddress, requestId }) {
-  await db.query(
-    `INSERT INTO audit_logs
-     (actor_type, actor_id, action, entity_type, entity_id, metadata, ip_address, request_id_header)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [actorType, actorId, action, entityType, entityId ?? null, metadata ?? null, ipAddress ?? null, requestId ?? null]
-  );
-}
-```
-
-### Session validity check middleware
-```javascript
-export async function requireValidSession(expectedState) {
-  return async (req, res, next) => {
-    const sessionId = req.session?.id;
-    const session = await db.query(
-      'SELECT * FROM voting_sessions WHERE id = $1', [sessionId]
-    );
-    const s = session.rows[0];
-    if (!s)               return res.status(401).json({ error: 'session_not_found' });
-    if (s.is_revoked)     return res.status(401).json({ error: 'session_revoked' });
-    if (s.expires_at < new Date()) return res.status(401).json({ error: 'session_expired' });
-    if (s.state !== expectedState) return res.status(409).json({ error: 'invalid_state' });
-    req.votingSession = s;
-    next();
-  };
-}
+setInterval(() => {
+  void runWithLock('job_name', async () => { /* idempotent work */ });
+}, intervalMs);
 ```
 
 ---
 
-*End of ARCHITECTURE.md*
-*Version: 1.0 — Matches VerifiedVote Master Prompt v3*
+*End of ARCHITECTURE.md*  
+*Version 2.0 — Codebase audit May 2026*  
 *Seed this file to every AI assistant at the start of every session.*
