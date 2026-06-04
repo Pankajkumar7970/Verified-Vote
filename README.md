@@ -33,7 +33,7 @@ VerifiedVote runs as **three logical services** (see [ARCHITECTURE.md](./ARCHITE
 | **Database** | PostgreSQL (+ `pgcrypto`) | Neon or local/Docker Postgres |
 | **Storage** | MinIO | Documents, ID photos, baseline/voting selfies |
 | **AI service** | Python FastAPI + DeepFace | `/embed`, `/verify`, `/liveness/blink` |
-| **Integrations** | Cloudflare Turnstile, TextBee SMS | Bot protection; async SMS queue |
+| **Integrations** | Cloudflare Turnstile, TextBee SMS | Bot protection; immediate OTP SMS + 15s queue backup |
 
 The frontend never calls the AI service directly. All business logic and DB writes live in the Node backend.
 
@@ -116,5 +116,6 @@ Create elections in **Admin → Elections** using the state/constituency dropdow
 
 ## Documentation
 
+- **[DEPLOY.md](./DEPLOY.md)** — Production deployment (Docker VPS, Fly/Koyeb split)
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Source of truth: invariants, API map, cron jobs, shortcomings
 - **[SETUP.md](./SETUP.md)** — Extended local setup (MinIO, AI, SMS, migrations)

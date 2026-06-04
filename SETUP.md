@@ -144,7 +144,7 @@ If the AI service is down during voting, sessions move to **`face_pending`** (ne
 
 Production target is TextBee (dev) / MSG91 (future). Today:
 
-- `send-sms` cron processes the `notifications` queue every 60s
+- OTP SMS (`auth_otp`, `voting_otp`) dispatch immediately after the API commits; `send-sms` cron processes any remaining `notifications` every 15s
 - Without `TEXTBEE_API_KEY` and `TEXTBEE_DEVICE_ID`, SMS is mocked to the server console:
 
 ```

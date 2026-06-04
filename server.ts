@@ -66,6 +66,7 @@ const EnvSchema = z.object({
   MINIO_BUCKET_NAME: z.string().default("verifiedvote-docs"),
   AI_SERVICE_URL: z.string().url().optional(),
   AI_TIMEOUT_MS: z.string().default("10000"),
+  AI_SERVICE_TIMEOUT_MS: z.string().optional(),
   TEXTBEE_API_KEY: z.string().optional(),
   FRONTEND_URL: z.string().url().default("http://localhost:3000"),
   APP_URL: z.string().url().default("http://localhost:3000"),

@@ -263,7 +263,7 @@ All jobs use Postgres **advisory locks** via `backend/src/cron/lock.ts` and upda
 
 | Job name | Interval | Purpose |
 |---|---|---|
-| `send_sms` | 1 min | Process `notifications` queue via TextBee |
+| `send_sms` | 15 sec | Backup: process `notifications` queue via TextBee (OTP also dispatches immediately) |
 | `retry_sms` | 5 min | Retry failed SMS |
 | `expire_sessions` | 1 min | Mark expired sessions |
 | `purge_otps` | 1 hr | Delete stale OTP rows |
@@ -396,7 +396,7 @@ WHERE status NOT IN ('rejected', 'withdrawn', 'appeal_resolved');
 
 ### SMS
 
-- Notifications queued in DB; `send_sms` cron sends asynchronously
+- Notifications queued in DB; OTP types dispatch immediately after commit; `send_sms` cron (15s) handles remaining pending rows
 - Failed sends retried by `retry_sms` cron — not inline in request handlers
 
 ---

@@ -3,12 +3,19 @@
     {
       "voter_id": "ABC1234567",
       "name": "TEST VOTER ONE",
+      "phone": "+919518075101",
+      "constituency": "NEW DELHI",
+      "state": "DELHI"
+    },
+    {
+      "voter_id": "ABC1234568",
+      "name": "TEST VOTER ONE",
       "phone": "+917814868211",
       "constituency": "NEW DELHI",
       "state": "DELHI"
     },
     {
-      "voter_id": "XYZ9876543",
+      "voter_id": "XYZ1234567",
       "name": "TEST VOTER TWO",
       "phone": "+918765432109",
       "constituency": "BANGALORE SOUTH",

@@ -16,6 +16,7 @@ import {
   logVerification,
 } from "../services/verification-log.service.js";
 import { queueNotification } from "../services/sms/notification-queue.js";
+import { scheduleOtpDispatch } from "../services/sms/dispatch-notification.js";
 import { MinIOService } from "../services/minio.service.js";
 
 import { config } from "../utils/config.js";
@@ -160,6 +161,7 @@ router.post(
             sessionId: session.id,
             requestId: session.request_id,
             state: session.state,
+            notificationId: null as string | null,
           };
         }
 
@@ -185,7 +187,7 @@ router.post(
           [exchangeNonce, session.id],
         );
 
-        await queueNotification(
+        const notificationId = await queueNotification(
           session.voter_id,
           "voting_otp",
           { otp },
@@ -205,8 +207,13 @@ router.post(
           phoneEnc: session.phone_enc,
           nonce: exchangeNonce,
           state: "link_opened",
+          notificationId,
         };
       });
+
+      if (sessionData.notificationId) {
+        scheduleOtpDispatch(sessionData.notificationId, "voting_otp");
+      }
 
       await ensureSessionBaselineSnapshot(
         sessionData.sessionId,

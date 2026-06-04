@@ -7,6 +7,7 @@ import { logger } from '../utils/logger.js';
 import jwt from 'jsonwebtoken';
 import { config } from '../utils/config.js';
 import { queueNotification } from '../services/sms/notification-queue.js';
+import { scheduleOtpDispatch } from '../services/sms/dispatch-notification.js';
 import { verifyTurnstile } from '../middleware/turnstile.middleware.js';
 import { ValidationError, AuthError } from '../utils/errors.js';
 import { validate } from '../middleware/validate.middleware.js';
@@ -68,7 +69,7 @@ router.post('/verify-voter', voterVerifyLimiter, verifyTurnstile, validate(verif
     const nameEnc = await encryptValue(voter.name);
     const phoneEnc = await encryptValue(voter.phone);
 
-    const sessionNonce = await db.withTransaction(async (client) => {
+    const { sessionNonce, notificationId } = await db.withTransaction(async (client) => {
       const upsertRes = await client.query(
         `INSERT INTO voters (voter_id_hash, voter_id_enc, name_enc, phone_enc, constituency, state)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -94,9 +95,11 @@ router.post('/verify-voter', voterVerifyLimiter, verifyTurnstile, validate(verif
         [dbVoterId, otpHash, nonce]
       );
 
-      await queueNotification(dbVoterId, 'auth_otp', { otp }, client);
-      return nonce;
+      const queuedId = await queueNotification(dbVoterId, 'auth_otp', { otp }, client);
+      return { sessionNonce: nonce, notificationId: queuedId };
     });
+
+    scheduleOtpDispatch(notificationId, 'auth_otp');
 
     logger.info({
       action: 'otp_queued',
@@ -133,7 +136,8 @@ router.post('/resend-otp', otpLimiter, validate(resendOtpSchema), async (req, re
        VALUES ($1, $2, $3, now() + interval '10 minutes')`,
       [voterId, otpHash, session_nonce]
     );
-    await queueNotification(voterId, 'auth_otp', { otp });
+    const notificationId = await queueNotification(voterId, 'auth_otp', { otp });
+    scheduleOtpDispatch(notificationId, 'auth_otp');
 
     res.json({ success: true, session_nonce });
   } catch (err) {
