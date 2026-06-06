@@ -1,0 +1,51 @@
+{
+  "name": "@verifiedvote/backend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --ignore ../frontend/node_modules --ignore ../node_modules src/app.ts",
+    "build": "node build.mjs",
+    "start": "cross-env NODE_ENV=production node dist/server.js",
+    "lint": "tsc --noEmit",
+    "migrate": "node-pg-migrate -m src/db/migrations",
+    "seed:admins": "tsx src/db/seed/admin.seed.ts",
+    "test": "cross-env NODE_ENV=test tsx --test src/utils/ref-code.test.ts",
+    "test:integration": "cross-env NODE_ENV=test tsx --test src/test/integration.test.ts",
+    "db:keep-alive": "tsx src/cron/keep-db-alive.ts"
+  },
+  "dependencies": {
+    "axios": "^1.16.0",
+    "bcrypt": "^6.0.0",
+    "compression": "^1.8.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.5.1",
+    "helmet": "^8.2.0",
+    "jsonwebtoken": "^9.0.3",
+    "minio": "^8.0.5",
+    "multer": "^2.1.1",
+    "node-cron": "^4.2.1",
+    "pg": "^8.20.0",
+    "sanitize-html": "^2.17.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/compression": "^1.8.1",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^22.14.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.20.0",
+    "@types/sanitize-html": "^2.16.1",
+    "cross-env": "^7.0.3",
+    "esbuild": "^0.28.0",
+    "node-pg-migrate": "^8.0.4",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  }
+}

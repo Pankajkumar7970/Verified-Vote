@@ -65,7 +65,7 @@ Violations of rules in this file are not style issues — they are security and 
 
 ## Runtime & Deployment Model
 
-The repository is a **monorepo**, not separate `frontend/` and `backend/` packages:
+The repository uses **independent directories** for frontend and backend, rather than npm workspaces:
 
 | Path | Role |
 |---|---|
@@ -75,8 +75,8 @@ The repository is a **monorepo**, not separate `frontend/` and `backend/` packag
 | `ai-service/` | Standalone FastAPI process (port 8000) |
 | `migrations/` | `node-pg-migrate` SQL migrations at repo root |
 
-**Development:** `npm run dev` runs `tsx server.ts`, which mounts Vite in middleware mode on port 3000.  
-**Production:** `npm run build` produces `dist/` (Vite assets + bundled `server.js`); `npm start` serves the SPA from Express.
+**Development:** Local dev is typically done via `docker compose up` which mounts the volumes and starts both the Vite dev server and Express API. Alternatively, `npm run dev` in `backend/` runs `tsx src/app.ts` which mounts Vite in middleware mode.
+**Production:** `npm run build` in `backend/` produces `dist/` (via `build.mjs` esbuild script) and `npm run build` in `frontend/` produces Vite assets. `server.js` serves the SPA from Express.
 
 **Docker Compose** (`docker-compose.yml`) can run postgres, minio, ai-service, backend, and a preview frontend — but local dev typically runs postgres/minio/ai-service in Docker and the Node app on the host.
 
@@ -100,7 +100,7 @@ Cloudflare Turnstile    — bot protection on voter ID entry
 
 ### Backend
 ```
-Node.js + Express 4     — TypeScript via tsx (dev) / esbuild bundle (prod)
+Node.js + Express 4     — TypeScript via tsx (dev) / esbuild bundle (prod via build.mjs)
 pg (node-postgres)      — raw SQL, no ORM
 bcrypt                  — admin passwords + OTP hashing
 jsonwebtoken            — voter JWT, admin JWT, session JWT (separate secrets)
@@ -282,7 +282,9 @@ Crons start only after DB connectivity is confirmed (`waitForDbThenStartCrons` i
 
 ```
 verifiedvote/
-├── server.ts                    # Express + Vite/static + cron bootstrap
+├── frontend/                    # React frontend
+│   ├── index.html               # Vite entry point
+│   ├── vite.config.ts           # Merges env from local and root dirs
 ├── src/                         # React frontend
 │   ├── App.tsx                  # Routes (voter + admin)
 │   ├── main.tsx                 # QueryClientProvider + i18n
@@ -300,19 +302,22 @@ verifiedvote/
 │   │   ├── otp.service.ts
 │   │   ├── verification-log.service.ts
 │   │   ├── india-geo.service.ts
-│   │   ├── sms/                 # textbee.adapter, notification-queue, templates
+│   │   └── sms/                 # textbee.adapter, notification-queue, templates
 │   │   └── voter-verify/        # mock.adapter, protean.adapter (stub)
 │   ├── middleware/              # auth, session, rate-limit, turnstile, validate, error
 │   ├── cron/                    # All scheduled jobs + lock.ts
 │   ├── db/                      # pg pool, seed (admin.seed.ts, voter_roll.json)
 │   ├── utils/                   # crypto, logger, errors, state-machine, ref-code, receipt-token
 │   └── constants/               # system.ts, verification.ts
+│   ├── build.mjs                # ESBuild script for ESM/CJS interop
 ├── ai-service/
 │   ├── main.py                  # FastAPI app
 │   ├── liveness.py
 │   └── models.py
 ├── migrations/                  # node-pg-migrate *.cjs
-├── tests/                       # Playwright e2e
+├── tests/
+│   ├── e2e/                     # Playwright e2e (voter-flow.spec.ts)
+│   └── load/                    # k6 load tests (loadtest.js)
 ├── docker-compose.yml
 └── ARCHITECTURE.md
 ```
@@ -440,7 +445,6 @@ This section documents gaps between the **original master spec** and **current i
 | **SMS abstraction incomplete** | `send-sms.job.ts` imports `TextBeeAdapter` directly; no `SMSService` factory or MSG91 adapter despite env documentation |
 | **Single Node deployment** | Production build bundles frontend into Express; original three-host deploy (Vercel/Fly/Koyeb) not codified |
 | **Neon cold start** | DB pool timeout 30s; crons retry until DB available; `db:keep-alive` script exists for Neon free tier |
-| **SQLite artifact** | `backend/sqlite.db` may exist locally — not used by application code (Postgres only) |
 | **Test coverage** | Unit test for ref-code; integration test file exists; Playwright e2e partially configured |
 
 ### Data lifecycle assumptions

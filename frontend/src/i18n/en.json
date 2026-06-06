@@ -1,0 +1,16 @@
+{
+  "app": {
+    "title": "VerifiedVote",
+    "description": "Secure remote voting authorization platform"
+  },
+  "auth": {
+    "verifyVoter": "Verify Voter ID",
+    "voterIdLabel": "Voter ID"
+  },
+  "ballot": {
+    "submitVote": "Submit Vote"
+  },
+  "errors": {
+    "invalidVoterId": "Invalid Voter ID format. Expected 3 letters + 7 alphanumeric."
+  }
+}

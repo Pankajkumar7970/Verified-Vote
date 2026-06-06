@@ -1,30 +1,13 @@
-import { Router } from 'express';
-import { requireAdmin } from '../middleware/auth.middleware.js';
-import { getConstituenciesForState, getIndianStates } from '../services/india-geo.service.js';
-import { BaseError, ValidationError } from '../utils/errors.js';
+/**
+ * Admin geo routes: states and constituencies for election setup.
+ */
+import { Router } from "express";
+import { requireAdmin } from "../middleware/auth.middleware.js";
+import * as geoController from "../controllers/geo.controller.js";
 
 const router = Router();
 
-router.get('/states', requireAdmin, async (req, res, next) => {
-  try {
-    const states = await getIndianStates();
-    res.json({ states });
-  } catch (err) {
-    next(new BaseError('geo_unavailable', 503));
-  }
-});
-
-router.get('/constituencies', requireAdmin, async (req, res, next) => {
-  const state = typeof req.query.state === 'string' ? req.query.state.trim() : '';
-  if (!state) {
-    return next(new ValidationError('missing_state'));
-  }
-  try {
-    const constituencies = await getConstituenciesForState(state);
-    res.json({ state, constituencies });
-  } catch (err) {
-    next(new BaseError('geo_unavailable', 503));
-  }
-});
+router.get("/states", requireAdmin, geoController.getStates);
+router.get("/constituencies", requireAdmin, geoController.getConstituencies);
 
 export default router;

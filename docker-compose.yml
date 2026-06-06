@@ -28,7 +28,9 @@ services:
       - "8000:8000"
 
   backend:
-    build: ./
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "cd backend && npm run dev"
     ports:
       - "3000:3000"
     depends_on:
@@ -46,11 +48,12 @@ services:
       - AI_SERVICE_URL=http://ai-service:8000
     volumes:
       - ./:/app
-      - /app/node_modules
+      - /app/backend/node_modules
 
   frontend:
-    build: ./
-    command: npm run preview
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "cd frontend && npm run dev"
     ports:
       - "5173:5173"
     depends_on:

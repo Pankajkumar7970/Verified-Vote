@@ -62,13 +62,23 @@ The frontend never calls the AI service directly. All business logic and DB writ
 ### Quick start
 
 ```bash
-cp .env.example .env   # edit DATABASE_URL, secrets, MinIO, AI URL
-npm install
+cp backend/.env.example backend/.env    # DATABASE_URL, JWT, MinIO, SMS, AI
+cp frontend/.env.example frontend/.env  # VITE_TURNSTILE_SITE_KEY
+
+# Install dependencies for both independent directories
+cd frontend && npm install
+cd ../backend && npm install
+
+# Run database migrations and seed (inside backend directory)
 npm run migrate
 npm run seed:admins
+
+cd ..
 docker compose up -d minio   # optional but recommended
-npm run dev
+docker compose up -d         # Starts Postgres, MinIO, AI, Backend (port 3000), Frontend (port 5173)
 ```
+
+The repository separates `frontend/` (React + Vite) and `backend/` (Express API) into completely independent directories rather than using NPM workspaces. The frontend's Vite config will automatically load environment variables from `frontend/.env` as well as the root project directory (if injected by CI/CD).
 
 Open **http://localhost:3000**.
 
@@ -105,12 +115,13 @@ Create elections in **Admin → Elections** using the state/constituency dropdow
 
 | Command | Purpose |
 |---|---|
-| `npm run dev` | Start Express + Vite dev server |
-| `npm run build` / `npm start` | Production build and serve |
-| `npm run migrate` | Apply Postgres migrations |
-| `npm run seed:admins` | Seed super admin + reviewer |
-| `npm test` | Unit tests |
-| `npm run test:integration` | Integration tests |
+| `docker compose up` | Run all services locally (Backend, Frontend, Postgres, MinIO, AI) |
+| `npm run dev` (in `backend/`) | Start Express dev server |
+| `npm run build` (in `backend/`) | Production build (uses ESBuild via `build.mjs`) |
+| `npm run migrate` (in `backend/`) | Apply Postgres migrations |
+| `npm run seed:admins` (in `backend/`) | Seed super admin + reviewer |
+| `npm test` (in `backend/`) | Unit tests |
+| `npm run test:integration` (in `backend/`) | Integration tests |
 
 ---
 

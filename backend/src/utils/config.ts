@@ -4,11 +4,11 @@ dotenv.config();
 const isProd = process.env.NODE_ENV === 'production';
 
 function requireEnv(name: string, devFallback?: string): string {
-  const value = process.env[name] || (!isProd ? devFallback : undefined);
-  if (!value) {
+  const value = process.env[name] !== undefined ? process.env[name] : (!isProd ? devFallback : undefined);
+  if (value === undefined) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
-  return value;
+  return value!;
 }
 
 export const config = {
@@ -21,6 +21,8 @@ export const config = {
   appUrl: process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
   aiServiceUrl: process.env.AI_SERVICE_URL?.replace(/\/$/, '') || '',
   aiTimeoutMs: Number(process.env.AI_SERVICE_TIMEOUT_MS || 10000),
-  turnstileSecret: requireEnv('TURNSTILE_SECRET_KEY', 'dev-only-turnstile-secret'),
+  // Empty string = Turnstile disabled (middleware bypasses). Set a real secret in production.
+  turnstileSecret: requireEnv('TURNSTILE_SECRET_KEY', ''),
   voterVerifyMode: process.env.VOTER_VERIFY_MODE || 'mock',
 };
+

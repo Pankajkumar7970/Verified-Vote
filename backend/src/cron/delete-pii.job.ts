@@ -52,7 +52,7 @@ async function execute() {
              OR (v.data_expires_at IS NOT NULL AND v.data_expires_at < now()))
             AND s.voting_selfie_minio_key IS NOT NULL
         `);
-      } catch {}
+      } catch { }
 
       // Step 2: Delete files from MinIO
       let deletedFilesCount = 0;
@@ -63,21 +63,21 @@ async function execute() {
             const key = await decryptDocKey(req.request_selfie_minio_key);
             await MinIOService.deleteDocument(key);
             deletedFilesCount++;
-          } catch {}
+          } catch { }
         }
         if (req.voter_id_photo_minio_key) {
           try {
             const key = await decryptDocKey(req.voter_id_photo_minio_key);
             await MinIOService.deleteDocument(key);
             deletedFilesCount++;
-          } catch {}
+          } catch { }
         }
         if (req.appeal_doc_minio_key) {
           try {
             const key = await decryptDocKey(req.appeal_doc_minio_key);
             await MinIOService.deleteDocument(key);
             deletedFilesCount++;
-          } catch {}
+          } catch { }
         }
       }
 
@@ -87,7 +87,7 @@ async function execute() {
             const key = await decryptDocKey(sess.voting_selfie_minio_key);
             await MinIOService.deleteDocument(key);
             deletedFilesCount++;
-          } catch {}
+          } catch { }
         }
       }
 
@@ -98,9 +98,9 @@ async function execute() {
             request_selfie_minio_key = null,
             voter_id_photo_minio_key = null,
             appeal_doc_minio_key = null
-        FROM elections e
-        JOIN voters v ON r.voter_id = v.id
+        FROM elections e, voters v
         WHERE r.election_id = e.id
+          AND r.voter_id = v.id
           AND ((e.status = 'results_published' AND e.results_published_at < now() - INTERVAL '30 days')
                OR (v.data_expires_at IS NOT NULL AND v.data_expires_at < now()))
           AND (r.request_selfie_embedding_enc IS NOT NULL
@@ -122,7 +122,7 @@ async function execute() {
                  OR (v.data_expires_at IS NOT NULL AND v.data_expires_at < now()))
             AND s.voting_selfie_minio_key IS NOT NULL
         `);
-      } catch {}
+      } catch { }
 
       let votersDeletedCount = 0;
       if (voterIds.length > 0) {
@@ -135,9 +135,9 @@ async function execute() {
       }
 
       if (votersDeletedCount > 0 || deletedFilesCount > 0 || emb.rowCount || sessUpdate.rowCount) {
-        logger.info({ 
-          action: 'cron_delete_pii', 
-          embeddings: emb.rowCount, 
+        logger.info({
+          action: 'cron_delete_pii',
+          embeddings: emb.rowCount,
           voters_purged_count: votersDeletedCount,
           voters_purged_details: affectedVoters.rows,
           files: deletedFilesCount,
@@ -148,9 +148,9 @@ async function execute() {
           `INSERT INTO audit_logs (actor_type, actor_id, action, entity_type, metadata)
            VALUES ('system', $1, 'pii_deleted', 'voter', $2)`,
           [
-            SYSTEM_AUDIT_ACTOR_ID, 
-            JSON.stringify({ 
-              embeddings: emb.rowCount, 
+            SYSTEM_AUDIT_ACTOR_ID,
+            JSON.stringify({
+              embeddings: emb.rowCount,
               voters_purged_count: votersDeletedCount,
               voters: affectedVoters.rows,
               files: deletedFilesCount,
