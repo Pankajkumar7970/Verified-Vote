@@ -7,14 +7,15 @@
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --target=es2022 --outfile=dist/server.js --format=esm --external:express --external:pg --external:bcrypt --external:jsonwebtoken --external:minio",
     "start": "cross-env NODE_ENV=production node dist/server.js",
-    "preview": "vite preview",
+    "preview": "npm run build && wrangler dev",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "cross-env NODE_ENV=test tsx --test backend/src/utils/ref-code.test.ts",
     "test:integration": "cross-env NODE_ENV=test tsx --test backend/src/test/integration.test.ts",
     "migrate": "node-pg-migrate",
     "seed:admins": "tsx backend/src/db/seed/admin.seed.ts",
-    "db:keep-alive": "tsx backend/src/cron/keep-db-alive.ts"
+    "db:keep-alive": "tsx backend/src/cron/keep-db-alive.ts",
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "@marsidev/react-turnstile": "^1.5.2",
@@ -51,6 +52,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.40.0",
     "@playwright/test": "^1.60.0",
     "@types/bcrypt": "^6.0.0",
     "@types/compression": "^1.8.1",
@@ -71,6 +73,7 @@
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "wrangler": "^4.98.0"
   }
 }

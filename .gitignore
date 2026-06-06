@@ -29,3 +29,8 @@ venv/
 diff.txt
 *.diff
 *.patch.bak
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
