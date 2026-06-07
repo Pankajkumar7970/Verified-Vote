@@ -7,6 +7,12 @@ import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import './index.css';
 import './i18n';
 
+import axios from 'axios';
+
+if (import.meta.env.VITE_BACKEND_URL) {
+  axios.defaults.baseURL = import.meta.env.VITE_BACKEND_URL;
+}
+
 const queryClient = new QueryClient();
 
 createRoot(document.getElementById('root')!).render(

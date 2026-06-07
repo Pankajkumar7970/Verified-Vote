@@ -6,7 +6,9 @@ import axios from "axios";
 export const SESSION_TOKEN_KEY = "vv_session_token";
 
 export function createVotingSessionApi() {
-  const api = axios.create();
+  const api = axios.create({
+    baseURL: import.meta.env.VITE_BACKEND_URL || undefined
+  });
   api.interceptors.request.use((config) => {
     const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
     if (token) {
