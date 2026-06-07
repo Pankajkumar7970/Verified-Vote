@@ -25,7 +25,7 @@ services:
   ai-service:
     build: ./ai-service
     ports:
-      - "8000:8000"
+      - "7860:7860"
 
   backend:
     image: node:20-alpine
@@ -45,7 +45,7 @@ services:
       - MINIO_USE_SSL=false
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
-      - AI_SERVICE_URL=http://ai-service:8000
+      - AI_SERVICE_URL=http://ai-service:7860
     volumes:
       - ./:/app
       - /app/backend/node_modules

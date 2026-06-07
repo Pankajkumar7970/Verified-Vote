@@ -292,9 +292,8 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(frontendDist));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(frontendDist, "index.html"));
+    app.get("/", (_req, res) => {
+      res.json({ message: "VerifiedVote API Backend" });
     });
   }
 

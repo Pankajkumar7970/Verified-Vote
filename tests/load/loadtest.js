@@ -15,7 +15,7 @@ export default function () {
     embedding_b: Array(512).fill(0.1),
   });
   
-  const res = http.post('http://localhost:8000/verify', payload, {
+  const res = http.post('http://localhost:7860/verify', payload, {
     headers: { 'Content-Type': 'application/json' },
   });
   

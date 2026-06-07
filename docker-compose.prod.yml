@@ -37,7 +37,7 @@ services:
     build: ./ai-service
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/live')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/live')"]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -59,7 +59,7 @@ services:
       MINIO_ENDPOINT: minio
       MINIO_PORT: "9000"
       MINIO_USE_SSL: "false"
-      AI_SERVICE_URL: http://ai-service:8000
+      AI_SERVICE_URL: http://ai-service:7860
       RUN_MIGRATIONS: "true"
       SEED_ADMINS: ${SEED_ADMINS:-false}
     depends_on:

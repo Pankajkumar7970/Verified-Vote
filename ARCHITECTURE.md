@@ -72,7 +72,7 @@ The repository uses **independent directories** for frontend and backend, rather
 | `server.ts` | Express entry point: API routes, health checks, cron startup, Vite/static serving |
 | `src/` | React frontend (pages, components, contexts) |
 | `backend/src/` | Express routes, services, middleware, cron, DB utilities |
-| `ai-service/` | Standalone FastAPI process (port 8000) |
+| `ai-service/` | Standalone FastAPI process (port 7860) |
 | `migrations/` | `node-pg-migrate` SQL migrations at repo root |
 
 **Development:** Local dev is typically done via `docker compose up` which mounts the volumes and starts both the Vite dev server and Express API. Alternatively, `npm run dev` in `backend/` runs `tsx src/app.ts` which mounts Vite in middleware mode.

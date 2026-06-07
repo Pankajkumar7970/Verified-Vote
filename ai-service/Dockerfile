@@ -50,13 +50,13 @@ RUN useradd --create-home --shell /bin/bash appuser
 USER appuser
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-EXPOSE 8000
+EXPOSE 7860
 
 # --workers 1: DeepFace model is not fork-safe; use single worker.
 # --timeout-keep-alive 30: slightly longer than Node's 10s request timeout.
 CMD ["uvicorn", "main:app", \
      "--host", "0.0.0.0", \
-     "--port", "8000", \
+     "--port", "7860", \
      "--workers", "1", \
      "--timeout-keep-alive", "30", \
      "--log-level", "info"]

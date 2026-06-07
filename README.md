@@ -93,10 +93,10 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --host 127.0.0.1 --port 8000
+uvicorn main:app --host 127.0.0.1 --port 7860
 ```
 
-Set `AI_SERVICE_URL=http://127.0.0.1:8000` in `.env`. First startup downloads DeepFace weights (several minutes).
+Set `AI_SERVICE_URL=http://127.0.0.1:7860` in `.env`. First startup downloads DeepFace weights (several minutes).
 
 Detailed steps: [SETUP.md](./SETUP.md).
 
