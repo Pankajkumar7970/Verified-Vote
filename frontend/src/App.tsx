@@ -21,6 +21,7 @@ import {
   Info,
   CheckCircle2,
   AlertCircle,
+  Menu,
 } from "lucide-react";
 import { AuthProvider } from "./store/AuthContext";
 import { VoterProvider, useVoterAuth } from "./store/VoterContext";
@@ -83,6 +84,7 @@ function Navbar() {
   const { t, i18n } = useTranslation();
   const { fontSize, setFontSize, highContrast, setHighContrast } =
     useFontSize();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const toggleLanguage = () => {
     i18n.changeLanguage(i18n.language === "en" ? "hi" : "en");
@@ -103,7 +105,7 @@ function Navbar() {
             {t("app.title", "VerifiedVote")}
           </h1>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="hidden md:flex items-center gap-4">
           <Link
             to="/verify-receipt"
             className="text-sm font-medium hover:text-[#5A5A40] transition-colors"
@@ -140,7 +142,57 @@ function Navbar() {
             {i18n.language === "en" ? "हिंदी" : "English"}
           </button>
         </div>
+        <button
+          className="md:hidden p-2 text-[#5A5A40]"
+          onClick={() => setIsMenuOpen(!isMenuOpen)}
+          aria-label="Toggle Menu"
+        >
+          {isMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+        </button>
       </div>
+      
+      {/* Mobile Menu Dropdown */}
+      {isMenuOpen && (
+        <div className="md:hidden border-t border-[rgba(26,26,26,0.1)] bg-white">
+          <div className="px-4 py-3 space-y-3 flex flex-col items-start">
+            <Link
+              to="/verify-receipt"
+              onClick={() => setIsMenuOpen(false)}
+              className="text-sm font-medium hover:text-[#5A5A40] w-full text-left py-2"
+            >
+              Verify Receipt
+            </Link>
+            <Link
+              to="/admin/login"
+              onClick={() => setIsMenuOpen(false)}
+              className="text-sm font-medium hover:text-[#5A5A40] w-full text-left py-2"
+            >
+              Admin Portal
+            </Link>
+            <button
+              type="button"
+              onClick={() => { cycleFont(); setIsMenuOpen(false); }}
+              className="text-sm font-medium hover:text-[#5A5A40] w-full text-left py-2"
+            >
+              Change Font Size (Aa)
+            </button>
+            <button
+              type="button"
+              onClick={() => { setHighContrast(!highContrast); setIsMenuOpen(false); }}
+              className="text-sm font-medium hover:text-[#5A5A40] w-full text-left py-2"
+            >
+              Toggle Contrast
+            </button>
+            <button
+              type="button"
+              onClick={() => { toggleLanguage(); setIsMenuOpen(false); }}
+              className="text-sm font-medium hover:text-[#5A5A40] w-full text-left py-2"
+            >
+              {i18n.language === "en" ? "हिंदी" : "English"}
+            </button>
+          </div>
+        </div>
+      )}
     </header>
   );
 }
@@ -149,6 +201,7 @@ function Home() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [voterId, setVoterId] = useState("");
+  const [mobileNumber, setMobileNumber] = useState("");
   const [loading, setLoading] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileLoading, setTurnstileLoading] = useState(true);
@@ -171,6 +224,7 @@ function Home() {
     try {
       const payload = {
         voter_id: voterId.trim(),
+        mobile_number: mobileNumber.trim(),
         turnstile_token: turnstileToken,
       };
       const response = await axios.post("/api/auth/verify-voter", payload);
@@ -217,7 +271,7 @@ function Home() {
 
   return (
     <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
-      <div className="warm-card max-w-md w-full p-8 relative overflow-hidden">
+      <div className="warm-card max-w-md w-full p-6 sm:p-8 relative overflow-hidden">
         <div className="oversized-number absolute -top-4 -left-2 pointer-events-none select-none">
           01
         </div>
@@ -292,6 +346,24 @@ function Home() {
                   Expected: 3 letters + 7 characters (e.g. ABC1234567)
                 </p>
               )}
+            </div>
+
+            <div>
+              <label
+                htmlFor="mobileNumber"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                {t("auth.mobileNumberLabel", "Mobile Number (with country code)")}
+              </label>
+              <input
+                id="mobileNumber"
+                type="tel"
+                placeholder="+919876543210"
+                required
+                value={mobileNumber}
+                onChange={(e) => setMobileNumber(e.target.value)}
+                className="w-full px-4 py-2 bg-[#f5f2ed] border border-[rgba(26,26,26,0.2)] rounded-md focus:outline-none focus:ring-2 focus:ring-[#5A5A40]"
+              />
             </div>
 
             <div className="flex justify-center my-4">

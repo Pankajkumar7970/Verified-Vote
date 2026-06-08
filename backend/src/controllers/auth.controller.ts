@@ -17,7 +17,7 @@ import {
 } from "../middleware/ip-blocker.middleware.js";
 
 export async function verifyVoter(req: any, res: Response, next: NextFunction) {
-  const { voter_id } = req.body;
+  const { voter_id, mobile_number } = req.body;
 
   try {
     const voter = await VoterVerificationService.verifyVoter(voter_id);
@@ -32,7 +32,7 @@ export async function verifyVoter(req: any, res: Response, next: NextFunction) {
     const { encryptValue } = await import("../utils/crypto.js");
     const voterIdEnc = await encryptValue(voter.voter_id.toUpperCase());
     const nameEnc = await encryptValue(voter.name);
-    const phoneEnc = await encryptValue(voter.phone);
+    const phoneEnc = await encryptValue(mobile_number);
 
     const { sessionNonce, notificationId } = await db.withTransaction(
       async (client) => {

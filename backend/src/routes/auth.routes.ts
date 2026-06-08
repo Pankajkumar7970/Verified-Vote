@@ -16,6 +16,7 @@ import * as authController from "../controllers/auth.controller.js";
 const verifyVoterSchema = z.object({
   body: z.object({
     voter_id: z.string().regex(/^[A-Z]{3}[A-Z0-9]{7}$/i, "invalid_voter_id"),
+    mobile_number: z.string().regex(/^\+\d{10,15}$/, "invalid_mobile_number"),
   }),
 });
 
